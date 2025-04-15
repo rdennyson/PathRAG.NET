@@ -363,4 +363,6 @@ MigrationBackup/
 FodyWeavers.xsd
 
 *appsettings.json
-/src/PathRAG.Api/appsettings.json
+/src/Backend/PathRAG.Api/appsettings.json
+/src/Frontend/.env
+/Frontend/.env
