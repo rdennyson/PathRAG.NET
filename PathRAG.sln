@@ -2,19 +2,19 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{D8F9A015-76B3-4E51-8C5B-6D6E8F442D15}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Backend", "Backend", "{D8F9A015-76B3-4E51-8C5B-6D6E8F442D15}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PathRAG.Api", "src\PathRAG.Api\PathRAG.Api.csproj", "{C1E7F7D3-8B5E-4B4F-9E8D-9C2E6B6D7E1A}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PathRAG.Api", "Backend\PathRAG.Api\PathRAG.Api.csproj", "{C1E7F7D3-8B5E-4B4F-9E8D-9C2E6B6D7E1A}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PathRAG.Core", "src\PathRAG.Core\PathRAG.Core.csproj", "{A2E8F7D3-8B5E-4B4F-9E8D-9C2E6B6D7E1B}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PathRAG.Core", "Backend\PathRAG.Core\PathRAG.Core.csproj", "{A2E8F7D3-8B5E-4B4F-9E8D-9C2E6B6D7E1B}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PathRAG.Infrastructure", "src\PathRAG.Infrastructure\PathRAG.Infrastructure.csproj", "{B3E7F7D3-8B5E-4B4F-9E8D-9C2E6B6D7E1C}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PathRAG.Infrastructure", "Backend\PathRAG.Infrastructure\PathRAG.Infrastructure.csproj", "{B3E7F7D3-8B5E-4B4F-9E8D-9C2E6B6D7E1C}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{E8F9A015-76B3-4E51-8C5B-6D6E8F442D16}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F5F9A015-76B3-4E51-8C5B-6D6E8F442D17}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PathRAG.Tests", "src\PathRAG.Tests\PathRAG.Tests.csproj", "{15820B8B-E724-47FB-A3FA-0A69F917D6CE}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PathRAG.Tests", "Backend\PathRAG.Tests\PathRAG.Tests.csproj", "{15820B8B-E724-47FB-A3FA-0A69F917D6CE}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

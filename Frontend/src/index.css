@@ -1,0 +1,413 @@
+:root {
+  --primary-color: #3498ff;
+  --secondary-color: #673ab7;
+  --accent-color: #ff5733;
+  --background-dark: #1a1d24;
+  --background-light: #f5f8fa;
+  --text-dark: #2c3e50;
+  --text-light: #ecf0f1;
+  --border-color: #34495e;
+  --success-color: #27ae60;
+  --warning-color: #f1c40f;
+  --error-color: #e74c3c;
+  --info-color: #3498db;
+
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Base styles */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--background-light);
+  color: var(--text-dark);
+}
+
+/* Dark mode */
+.dark-mode {
+  background-color: var(--background-dark);
+  color: var(--text-light);
+}
+
+/* Techno theme styles */
+.techno-theme {
+  --primary-color: #00f2ff;
+  --secondary-color: #ff00e4;
+  --accent-color: #00ff9f;
+  --background-dark: #0a0e17;
+  --background-light: #f0f7ff;
+  --text-dark: #1a1f2c;
+  --text-light: #e0f0ff;
+  --border-color: #2a3a5a;
+}
+
+/* Utility classes */
+.flex {
+  display: flex;
+}
+
+.flex-col {
+  flex-direction: column;
+}
+
+.flex-row {
+  flex-direction: row;
+}
+
+.flex-row-reverse {
+  flex-direction: row-reverse;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.justify-center {
+  justify-content: center;
+}
+
+.justify-between {
+  justify-content: space-between;
+}
+
+.justify-end {
+  justify-content: flex-end;
+}
+
+.justify-start {
+  justify-content: flex-start;
+}
+
+.flex-grow {
+  flex-grow: 1;
+}
+
+.h-full {
+  height: 100%;
+}
+
+.h-screen {
+  height: 100vh;
+}
+
+.min-h-screen {
+  min-height: 100vh;
+}
+
+.w-full {
+  width: 100%;
+}
+
+.max-w-3xl {
+  max-width: 48rem;
+}
+
+.p-3 {
+  padding: 0.75rem;
+}
+
+.p-4 {
+  padding: 1rem;
+}
+
+.px-4 {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+.py-2 {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.m-2 {
+  margin: 0.5rem;
+}
+
+.mx-auto {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.mb-2 {
+  margin-bottom: 0.5rem;
+}
+
+.mb-4 {
+  margin-bottom: 1rem;
+}
+
+.mr-2 {
+  margin-right: 0.5rem;
+}
+
+.mr-3 {
+  margin-right: 0.75rem;
+}
+
+.mr-4 {
+  margin-right: 1rem;
+}
+
+.ml-2 {
+  margin-left: 0.5rem;
+}
+
+.ml-3 {
+  margin-left: 0.75rem;
+}
+
+.mt-1 {
+  margin-top: 0.25rem;
+}
+
+.mt-2 {
+  margin-top: 0.5rem;
+}
+
+.rounded-lg {
+  border-radius: 0.5rem;
+}
+
+.shadow-lg {
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+.text-center {
+  text-align: center;
+}
+
+.text-sm {
+  font-size: 0.875rem;
+}
+
+.text-xs {
+  font-size: 0.75rem;
+}
+
+.text-3xl {
+  font-size: 1.875rem;
+}
+
+.text-gray-500 {
+  color: #6b7280;
+}
+
+.text-red-500 {
+  color: #ef4444;
+}
+
+.text-blue-500 {
+  color: #3b82f6;
+}
+
+.bg-white {
+  background-color: #ffffff;
+}
+
+.bg-gray-50 {
+  background-color: #f9fafb;
+}
+
+.bg-gray-100 {
+  background-color: #f3f4f6;
+}
+
+.bg-blue-50 {
+  background-color: #eff6ff;
+}
+
+.bg-purple-50 {
+  background-color: #f5f3ff;
+}
+
+.border-t {
+  border-top-width: 1px;
+}
+
+.border-r {
+  border-right-width: 1px;
+}
+
+.border-b {
+  border-bottom-width: 1px;
+}
+
+.border-gray-200 {
+  border-color: #e5e7eb;
+}
+
+.border-2 {
+  border-width: 2px;
+}
+
+.border-dashed {
+  border-style: dashed;
+}
+
+.border-gray-300 {
+  border-color: #d1d5db;
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+.hover\:bg-gray-100:hover {
+  background-color: #f3f4f6;
+}
+
+.hover\:underline:hover {
+  text-decoration: underline;
+}
+
+/* Dark mode overrides */
+.dark\:bg-gray-700 {
+  background-color: #374151;
+}
+
+.dark\:bg-gray-800 {
+  background-color: #1f2937;
+}
+
+.dark\:bg-gray-900 {
+  background-color: #111827;
+}
+
+.dark\:bg-blue-900 {
+  background-color: #1e3a8a;
+}
+
+.dark\:bg-purple-900 {
+  background-color: #581c87;
+}
+
+.dark\:text-gray-300 {
+  color: #d1d5db;
+}
+
+.dark\:border-gray-700 {
+  border-color: #374151;
+}
+
+.dark\:hover\:bg-gray-700:hover {
+  background-color: #374151;
+}
+
+/* Techno theme specific styles */
+.techno-glow {
+  text-shadow: 0 0 5px var(--primary-color), 0 0 10px var(--primary-color);
+}
+
+.techno-border {
+  border: 1px solid var(--primary-color);
+  box-shadow: 0 0 5px var(--primary-color), inset 0 0 5px var(--primary-color);
+}
+
+.techno-gradient {
+  background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+}
+
+.techno-button {
+  background: var(--background-dark);
+  color: var(--primary-color);
+  border: 1px solid var(--primary-color);
+  box-shadow: 0 0 5px var(--primary-color);
+  transition: all 0.3s ease;
+}
+
+.techno-button:hover {
+  background: var(--primary-color);
+  color: var(--background-dark);
+  box-shadow: 0 0 10px var(--primary-color), 0 0 20px var(--primary-color);
+}
+
+/* Animation classes */
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background-light);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--primary-color);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--secondary-color);
+}
+
+/* Dark mode scrollbar */
+.dark-mode::-webkit-scrollbar-track {
+  background: var(--background-dark);
+}
+
+/* Code block styling */
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+  background-color: rgba(0, 0, 0, 0.1);
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+pre {
+  background-color: #282c34;
+  border-radius: 5px;
+  padding: 1em;
+  overflow-x: auto;
+}
+
+pre code {
+  background-color: transparent;
+  padding: 0;
+  font-size: 0.9em;
+  color: #abb2bf;
+}
