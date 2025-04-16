@@ -129,7 +129,9 @@ const VectorStoreSettings: React.FC = () => {
                   value: vs.id
                 }))}
                 value={selectedVectorStoreId}
-                onChange={handleSelectVectorStore}
+                onChange={(value, _event) => {
+                  if (value) handleSelectVectorStore(value);
+                }}
                 block
                 placeholder="Select a vector store"
                 searchable={false}
@@ -244,3 +246,4 @@ const VectorStoreSettings: React.FC = () => {
 };
 
 export default VectorStoreSettings;
+

@@ -1,7 +1,7 @@
 import React from 'react';
-import { List, Button, IconButton, Dropdown, Nav, Sidenav } from 'rsuite';
+import { Button, IconButton, Dropdown, Nav, Sidenav } from 'rsuite';
 import { FaPlus, FaEllipsisV, FaTrash, FaRobot } from 'react-icons/fa';
-import { ChatSession, Assistant } from '../../models/types';
+import { ChatSession } from '../../models/types';
 import { useApp } from '../../contexts/AppContext';
 
 interface ChatSidebarProps {
@@ -28,14 +28,14 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
 
   const getChatTitle = (session: ChatSession): string => {
     if (session.title) return session.title;
-    
+
     // Generate title from first message or use default
     const firstUserMessage = session.messages.find(m => m.role === 'user');
     if (firstUserMessage) {
       const content = firstUserMessage.content;
       return content.length > 30 ? content.substring(0, 30) + '...' : content;
     }
-    
+
     return 'New Chat';
   };
 
@@ -46,7 +46,7 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
           <FaPlus className="mr-2" /> New Chat
         </Button>
       </div>
-      
+
       <div className="flex-grow overflow-y-auto">
         <Sidenav>
           <Sidenav.Body>
@@ -70,7 +70,7 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
                         {getAssistantName(session.assistantId)}
                       </div>
                     </div>
-                    
+
                     <Dropdown
                       placement="rightStart"
                       renderToggle={(props, ref) => (
@@ -88,7 +88,10 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
                         icon={<FaTrash />}
                         onClick={e => {
                           e.stopPropagation();
-                          onDeleteSession(session.id);
+                          // Show confirmation dialog
+                          if (window.confirm('Are you sure you want to delete this chat?')) {
+                            onDeleteSession(session.id);
+                          }
                         }}
                       >
                         Delete
@@ -106,3 +109,4 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
 };
 
 export default ChatSidebar;
+

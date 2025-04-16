@@ -1,0 +1,30 @@
+accelerate
+aioboto3
+aiohttp
+python-dotenv
+python-multipart
+fastapi 
+uvicorn 
+PyPDF2 
+python-docx 
+docx2txt
+python-pptx 
+openpyxl 
+striprtf 
+odfpy 
+ebooklib 
+beautifulsoup4
+# database packages
+graspologic
+openai
+nano-vectordb
+psycopg[binary,pool]
+sqlalchemy
+tenacity
+networkx
+
+# LLM packages
+tiktoken
+torch
+transformers
+xxhash

@@ -366,3 +366,4 @@ FodyWeavers.xsd
 /src/Backend/PathRAG.Api/appsettings.json
 /src/Frontend/.env
 /Frontend/.env
+/Backend/PathRAG.Api/wwwroot

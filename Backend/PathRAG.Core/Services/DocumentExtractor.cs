@@ -1,5 +1,6 @@
 using ClosedXML.Excel;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Presentation;
 using HtmlAgilityPack;
 using iText.Kernel.Pdf;
 using iText.Kernel.Pdf.Canvas.Parser;
@@ -7,8 +8,11 @@ using iText.Kernel.Pdf.Canvas.Parser.Listener;
 using Markdig;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml;
+using VersOne.Epub;
 using Paragraph = DocumentFormat.OpenXml.Wordprocessing.Paragraph;
 using Table = DocumentFormat.OpenXml.Wordprocessing.Table;
 using TableCell = DocumentFormat.OpenXml.Wordprocessing.TableCell;
@@ -44,30 +48,43 @@ public class DocumentExtractor : IDocumentExtractor
             { ".json", ExtractFromPlainTextAsync },
             { ".xml", ExtractFromPlainTextAsync },
             { ".csv", ExtractFromPlainTextAsync },
-            { ".rtf", ExtractFromRtfAsync }
+            { ".rtf", ExtractFromRtfAsync },
+            { ".pptx", ExtractFromPptxAsync },
+            { ".ppt", ExtractFromPptxAsync },
+            { ".epub", ExtractFromEpubAsync },
+            { ".odt", ExtractFromOdtAsync }
         };
     }
 
-    public bool IsSupported(string fileExtension)
+    public bool IsSupported(string fileName)
     {
-        return _extractors.ContainsKey(fileExtension);
+        if (string.IsNullOrEmpty(fileName))
+        {
+            return false;
+        }
+
+        string fileExtension = Path.GetExtension(fileName);
+        return !string.IsNullOrEmpty(fileExtension) && _extractors.ContainsKey(fileExtension);
     }
 
-    public async Task<string> ExtractTextAsync(Stream stream, string fileExtension, CancellationToken cancellationToken = default)
+    public async Task<string> ExtractTextAsync(Stream stream, string fileName, CancellationToken cancellationToken = default)
     {
-        if (!IsSupported(fileExtension))
+        if (!IsSupported(fileName))
         {
-            throw new NotSupportedException($"File extension {fileExtension} is not supported");
+            throw new NotSupportedException($"File {fileName} is not supported");
         }
+
+        string fileExtension = Path.GetExtension(fileName);
 
         try
         {
+            _logger.LogInformation("Extracting text from {FileName} with extension {FileExtension}", fileName, fileExtension);
             var text = await _extractors[fileExtension](stream, cancellationToken);
             return NormalizeText(text);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error extracting text from file with extension {FileExtension}", fileExtension);
+            _logger.LogError(ex, "Error extracting text from file {FileName} with extension {FileExtension}", fileName, fileExtension);
             throw;
         }
     }
@@ -239,6 +256,210 @@ public class DocumentExtractor : IDocumentExtractor
         var text = Regex.Replace(rtf, @"[\{\}\\\n]|<[^>]*>|\b\w+\b(?=:)", " ");
         text = Regex.Replace(text, @"\s+", " ");
         return text.Trim();
+    }
+
+    private async Task<string> ExtractFromPptxAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var text = new StringBuilder();
+        using var presentationDoc = PresentationDocument.Open(stream, false);
+        var presentationPart = presentationDoc.PresentationPart;
+
+        if (presentationPart == null)
+        {
+            return string.Empty;
+        }
+
+        var presentation = presentationPart.Presentation;
+        var slideIdList = presentation.SlideIdList;
+
+        if (slideIdList == null)
+        {
+            return string.Empty;
+        }
+
+        // Process each slide
+        foreach (var slideId in slideIdList.ChildElements.OfType<SlideId>())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var slidePartRelationshipId = slideId.RelationshipId;
+            if (slidePartRelationshipId == null)
+            {
+                continue;
+            }
+
+            var slidePart = presentationPart.GetPartById(slidePartRelationshipId) as SlidePart;
+            if (slidePart == null)
+            {
+                continue;
+            }
+
+            // Extract text from slide
+            text.AppendLine($"Slide {slideId.Id}:");
+
+            // Get all text elements in the slide
+            var paragraphs = slidePart.Slide.Descendants<DocumentFormat.OpenXml.Drawing.Paragraph>();
+            foreach (var paragraph in paragraphs)
+            {
+                var runs = paragraph.Descendants<DocumentFormat.OpenXml.Drawing.Run>();
+                foreach (var run in runs)
+                {
+                    var textElements = run.Descendants<DocumentFormat.OpenXml.Drawing.Text>();
+                    foreach (var textElement in textElements)
+                    {
+                        if (!string.IsNullOrWhiteSpace(textElement.Text))
+                        {
+                            text.AppendLine(textElement.Text.Trim());
+                        }
+                    }
+                }
+            }
+
+            // Extract text from notes if available
+            if (slidePart.NotesSlidePart != null)
+            {
+                text.AppendLine("Notes:");
+                var notesParagraphs = slidePart.NotesSlidePart.NotesSlide.Descendants<DocumentFormat.OpenXml.Drawing.Paragraph>();
+                foreach (var paragraph in notesParagraphs)
+                {
+                    var runs = paragraph.Descendants<DocumentFormat.OpenXml.Drawing.Run>();
+                    foreach (var run in runs)
+                    {
+                        var textElements = run.Descendants<DocumentFormat.OpenXml.Drawing.Text>();
+                        foreach (var textElement in textElements)
+                        {
+                            if (!string.IsNullOrWhiteSpace(textElement.Text))
+                            {
+                                text.AppendLine(textElement.Text.Trim());
+                            }
+                        }
+                    }
+                }
+            }
+
+            text.AppendLine();
+        }
+
+        return text.ToString();
+    }
+
+    private async Task<string> ExtractFromEpubAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Create a temporary file to save the stream content
+            var tempFilePath = Path.GetTempFileName();
+            try
+            {
+                using (var fileStream = File.Create(tempFilePath))
+                {
+                    await stream.CopyToAsync(fileStream, cancellationToken);
+                }
+                var text = new StringBuilder();
+                using (EpubBookRef bookRef = EpubReader.OpenBook(stream))
+                {
+                    foreach (var readingOrder in bookRef.GetReadingOrder())
+                    {
+                        string content = readingOrder.ReadContentAsText();
+                        text.AppendLine(content);
+                    }
+                }
+                
+
+                return text.ToString();
+            }
+            finally
+            {
+                // Clean up the temporary file
+                if (File.Exists(tempFilePath))
+                {
+                    File.Delete(tempFilePath);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error extracting text from EPUB file");
+            throw;
+        }
+    }
+
+    private static void PrintNavigationItem(EpubNavigationItemRef navigationItemRef, int identLevel)
+    {
+        Console.Write(new string(' ', identLevel * 2));
+        Console.WriteLine(navigationItemRef.Title);
+        foreach (EpubNavigationItemRef nestedNavigationItemRef in navigationItemRef.NestedItems)
+        {
+            PrintNavigationItem(nestedNavigationItemRef, identLevel + 1);
+        }
+    }
+
+    private async Task<string> ExtractFromOdtAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var text = new StringBuilder();
+
+            // Create a temporary file to save the stream content
+            var tempFilePath = Path.GetTempFileName();
+            try
+            {
+                using (var fileStream = File.Create(tempFilePath))
+                {
+                    await stream.CopyToAsync(fileStream, cancellationToken);
+                }
+
+                // ODT files are ZIP archives with XML content
+                using (var archive = ZipFile.OpenRead(tempFilePath))
+                {
+                    // The main content is in content.xml
+                    var contentEntry = archive.GetEntry("content.xml");
+                    if (contentEntry != null)
+                    {
+                        using var contentStream = contentEntry.Open();
+                        using var reader = new StreamReader(contentStream);
+                        var xmlContent = await reader.ReadToEndAsync(cancellationToken);
+
+                        // Parse the XML content
+                        var xmlDoc = new XmlDocument();
+                        xmlDoc.LoadXml(xmlContent);
+
+                        // Extract text from text:p elements (paragraphs)
+                        var nsManager = new XmlNamespaceManager(xmlDoc.NameTable);
+                        nsManager.AddNamespace("text", "urn:oasis:names:tc:opendocument:xmlns:text:1.0");
+
+                        var paragraphs = xmlDoc.SelectNodes("//text:p", nsManager);
+                        if (paragraphs != null)
+                        {
+                            foreach (XmlNode paragraph in paragraphs)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+
+                                if (!string.IsNullOrWhiteSpace(paragraph.InnerText))
+                                {
+                                    text.AppendLine(paragraph.InnerText.Trim());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return text.ToString();
+            }
+            finally
+            {
+                // Clean up the temporary file
+                if (File.Exists(tempFilePath))
+                {
+                    File.Delete(tempFilePath);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error extracting text from ODT file");
+            throw;
+        }
     }
 
     private string NormalizeText(string text)

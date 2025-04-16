@@ -10,6 +10,12 @@ public interface IEmbeddingCacheService
         string text,
         CancellationToken cancellationToken = default);
 
+    Task<(float[]? embedding, string? originalText)> GetSimilarEmbeddingAsync(
+        string text,
+        float[] queryEmbedding,
+        float similarityThreshold = 0.95f,
+        CancellationToken cancellationToken = default);
+
     Task CacheEmbeddingAsync(
         string text,
         float[] embedding,

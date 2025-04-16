@@ -1,22 +1,21 @@
 import { Configuration, LogLevel } from "@azure/msal-browser";
 
-// MSAL configuration
 export const msalConfig: Configuration = {
   auth: {
     clientId: import.meta.env.VITE_AZURE_CLIENT_ID || "",
     authority: `https://login.microsoftonline.com/${import.meta.env.VITE_AZURE_TENANT_ID}`,
     redirectUri: window.location.origin,
+    postLogoutRedirectUri: window.location.origin,
+    navigateToLoginRequestUrl: true,
   },
   cache: {
-    cacheLocation: "sessionStorage",
+    cacheLocation: "localStorage",
     storeAuthStateInCookie: false,
   },
   system: {
     loggerOptions: {
       loggerCallback: (level, message, containsPii) => {
-        if (containsPii) {
-          return;
-        }
+        if (containsPii) return;
         switch (level) {
           case LogLevel.Error:
             console.error(message);
@@ -30,21 +29,22 @@ export const msalConfig: Configuration = {
           case LogLevel.Warning:
             console.warn(message);
             return;
-          default:
-            return;
         }
       },
       logLevel: LogLevel.Info,
-    },
+    }
+  }
+};
+
+export const loginRequest = {
+  scopes: ["openid", "profile", "email", "offline_access"],
+};
+
+export const protectedResources = {
+  api: {
+    endpoint: import.meta.env.VITE_API_BASE_URL || "http://localhost:3000/api",
+    scopes: [],
   },
 };
 
-// Add scopes here for ID token to be used at Microsoft identity platform endpoints.
-export const loginRequest = {
-  scopes: ["User.Read", "openid", "profile", "email"],
-};
 
-// Add the endpoints here for Microsoft Graph API services you'd like to use.
-export const graphConfig = {
-  graphMeEndpoint: "https://graph.microsoft.com/v1.0/me",
-};

@@ -7,6 +7,11 @@ public interface ILLMResponseCacheService
         CancellationToken cancellationToken = default
     );
 
+    Task<string?> GetSimilarResponseAsync(
+        string query,
+        CancellationToken cancellationToken = default
+    );
+
     Task CacheResponseAsync(
         string query,
         string response,

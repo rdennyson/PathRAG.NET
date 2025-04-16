@@ -19,20 +19,21 @@ const Header: React.FC = () => {
         />
         PathRAG
       </Navbar.Brand>
-      
+
       {isAuthenticated && (
         <>
           <Nav>
             <Nav.Item as={Link} to="/search">Search</Nav.Item>
             <Nav.Item as={Link} to="/knowledge-graph">Knowledge Graph</Nav.Item>
+
           </Nav>
-          
+
           <Nav pullRight>
             <Nav.Item as={Link} to="/settings">
               <FaCog />
             </Nav.Item>
-            
-            <Dropdown 
+
+            <Dropdown
               title={
                 <Avatar
                   circle

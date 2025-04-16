@@ -1,8 +1,5 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using PathRAG.Core.Models;
-using System.Text;
-using Npgsql;
 
 namespace PathRAG.Infrastructure.Data;
 
@@ -12,6 +9,9 @@ public class PathRagDbContext : DbContext
     {
         // Register the vector extension with Npgsql
         // NpgsqlConnection.GlobalTypeMapper.EnableRecordsAsTuples = true;
+
+        // Configure Npgsql to use snake_case for database object names
+        AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
     }
 
     public DbSet<TextChunk> TextChunks { get; set; }
@@ -26,6 +26,57 @@ public class PathRagDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // Set all table names to lowercase for PostgreSQL compatibility
+        foreach (var entity in modelBuilder.Model.GetEntityTypes())
+        {
+            // Set table names to lowercase
+            var tableName = entity.GetTableName();
+            if (tableName != null)
+            {
+                entity.SetTableName(tableName.ToLower());
+            }
+
+            // Set column names to lowercase
+            foreach (var property in entity.GetProperties())
+            {
+                var columnName = property.GetColumnName();
+                if (columnName != null)
+                {
+                    property.SetColumnName(columnName.ToLower());
+                }
+            }
+
+            // Set primary key names to lowercase
+            foreach (var key in entity.GetKeys())
+            {
+                var keyName = key.GetName();
+                if (keyName != null)
+                {
+                    key.SetName(keyName.ToLower());
+                }
+            }
+
+            // Set foreign key names to lowercase
+            foreach (var key in entity.GetForeignKeys())
+            {
+                var constraintName = key.GetConstraintName();
+                if (constraintName != null)
+                {
+                    key.SetConstraintName(constraintName.ToLower());
+                }
+            }
+
+            // Set index names to lowercase
+            foreach (var index in entity.GetIndexes())
+            {
+                var indexName = index.GetDatabaseName();
+                if (indexName != null)
+                {
+                    index.SetDatabaseName(indexName.ToLower());
+                }
+            }
+        }
+
         // Configure vector columns
         ConfigureVectorEntity<TextChunk>(modelBuilder);
         ConfigureVectorEntity<GraphEntity>(modelBuilder);
@@ -48,22 +99,34 @@ public class PathRagDbContext : DbContext
 
         // Configure relationships
         modelBuilder.Entity<TextChunk>()
-            .HasOne<VectorStore>()
+            .HasOne(tc => tc.VectorStore)
             .WithMany(vs => vs.TextChunks)
             .HasForeignKey(tc => tc.VectorStoreId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        // Explicitly ignore any shadow properties that might be causing issues
+        modelBuilder.Entity<TextChunk>().Ignore("VectorStoreId1");
+        modelBuilder.Entity<TextChunk>().Ignore("VectorStoreId2");
+
         modelBuilder.Entity<GraphEntity>()
-            .HasOne<VectorStore>()
+            .HasOne(e => e.VectorStore)
             .WithMany(vs => vs.Entities)
             .HasForeignKey(e => e.VectorStoreId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        // Explicitly ignore any shadow properties that might be causing issues
+        modelBuilder.Entity<GraphEntity>().Ignore("VectorStoreId1");
+        modelBuilder.Entity<GraphEntity>().Ignore("VectorStoreId2");
+
         modelBuilder.Entity<Relationship>()
-            .HasOne<VectorStore>()
+            .HasOne(r => r.VectorStore)
             .WithMany(vs => vs.Relationships)
             .HasForeignKey(r => r.VectorStoreId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        // Explicitly ignore any shadow properties that might be causing issues
+        modelBuilder.Entity<Relationship>().Ignore("VectorStoreId1");
+        modelBuilder.Entity<Relationship>().Ignore("VectorStoreId2");
 
         modelBuilder.Entity<AssistantVectorStore>()
             .HasKey(avs => new { avs.AssistantId, avs.VectorStoreId });
@@ -112,11 +175,12 @@ public class PathRagDbContext : DbContext
             .HasIndex(cm => cm.ChatSessionId);
     }
 
-    private void ConfigureVectorEntity<T>(ModelBuilder modelBuilder) where T : class
+    private static void ConfigureVectorEntity<T>(ModelBuilder modelBuilder) where T : class
     {
         modelBuilder.Entity<T>()
             .Property("Embedding")
-            .HasColumnType("vector(1536)");
+            .HasColumnType("real[]")
+            .HasColumnName("embedding"); // Ensure the column name is lowercase
     }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
@@ -126,15 +190,30 @@ public class PathRagDbContext : DbContext
         // Enable pgvector extension if it doesn't exist
         optionsBuilder.UseNpgsql(builder =>
             builder.EnableRetryOnFailure()
-                   .CommandTimeout(60));
+                   .CommandTimeout(60)
+                   // Set PostgreSQL version
+                   .SetPostgresVersion(new Version(15, 0)));
     }
 
-    public async Task EnsureVectorExtensionAsync()
+    public async Task EnsureExtensionAsync()
     {
-        // Create the pgvector extension if it doesn't exist
-        await Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS vector");
+        try
+        {
+            // Create the pgvector extension if it doesn't exist
+            await Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS vector");
 
-        // Create the pg_trgm extension for text search
-        await Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+            // Create the Apache AGE extension if it doesn't exist
+            await Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS age");
+
+            // Create the pg_trgm extension for text search
+            await Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+
+            Console.WriteLine("PostgreSQL extensions installed successfully");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error installing PostgreSQL extensions: {ex.Message}");
+            throw; // Re-throw the exception to ensure the application fails if extensions can't be installed
+        }
     }
 }

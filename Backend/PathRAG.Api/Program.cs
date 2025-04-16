@@ -1,5 +1,6 @@
 using Azure.AI.OpenAI;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Identity.Web;
 using PathRAG.Core.Services;
@@ -11,6 +12,7 @@ using PathRAG.Core.Services.Query;
 using PathRAG.Core.Services.Vector;
 using PathRAG.Core;
 using PathRAG.Core.Services.Cache;
+using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,9 +27,17 @@ builder.Services.AddDistributedMemoryCache();
 // Add Logging
 builder.Services.AddLogging();
 
-// Add Authentication with Microsoft Identity
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
+// Add Authentication with Microsoft Identity and Cookie Authentication
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = "Cookie";
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultScheme = "Cookie";
+})
+// Add Cookie Authentication
+.AddScheme<AuthenticationSchemeOptions, PathRAG.Api.Auth.CookieAuthenticationHandler>("Cookie", options => { })
+// Add Microsoft Identity Web API
+.AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
 
 // Add Authorization
 builder.Services.AddAuthorization();
@@ -42,6 +52,29 @@ builder.Services.AddSingleton(sp =>
     );
 });
 
+// Add session support
+builder.Services.AddSession(options =>
+{
+    options.IdleTimeout = TimeSpan.FromMinutes(30);
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+});
+
+// Add HTTP client factory
+builder.Services.AddHttpClient();
+
+// Add CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("default", policy =>
+    {
+        policy.WithOrigins("http://localhost:3000")
+            .AllowAnyMethod()
+            .AllowAnyHeader()
+            .AllowCredentials();
+    });
+});
+
 // Add DbContext
 builder.Services.AddDbContext<PathRagDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -50,6 +83,7 @@ builder.Services.AddDbContext<PathRagDbContext>(options =>
 builder.Services.AddScoped<ITextChunkService, TextChunkService>();
 builder.Services.AddScoped<IDocumentExtractor, DocumentExtractor>();
 builder.Services.AddScoped<IEmbeddingService, EmbeddingService>();
+builder.Services.AddScoped<ILLMService, LLMService>();
 
 // Register Graph and Entity Services
 builder.Services.AddScoped<IGraphStorageService, PostgresAGEGraphStorageService>();
@@ -71,20 +105,12 @@ builder.Services.AddScoped<ILLMResponseCacheService, LLMResponseCacheService>();
 builder.Services.Configure<PathRagOptions>(builder.Configuration.GetSection("PathRAG"));
 
 // Add MediatR
-builder.Services.AddMediatR(cfg => {
+builder.Services.AddMediatR(cfg =>
+{
     cfg.RegisterServicesFromAssembly(typeof(PathRAG.Core.Commands.InsertDocumentCommand).Assembly);
 });
 
-// CORS Policy
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("AllowAll", builder =>
-    {
-        builder.AllowAnyOrigin()
-               .AllowAnyMethod()
-               .AllowAnyHeader();
-    });
-});
+
 
 var app = builder.Build();
 
@@ -94,9 +120,25 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+// Configure custom static file options
+app.UseStaticFiles(new StaticFileOptions
+{
+    // Optionally, change the root folder for static files (if not the default wwwroot)
+    FileProvider = new PhysicalFileProvider(Path.Combine(Directory.GetCurrentDirectory(), "wwwroot")),
 
+    // Custom cache control: serves files with caching headers
+    OnPrepareResponse = ctx =>
+    {
+        // Cache static content for 7 days (604800 seconds)
+        ctx.Context.Response.Headers["Cache-Control"] = "public,max-age=604800";
+    }
+});
 app.UseHttpsRedirection();
-app.UseCors("AllowAll");
+// Use session
+app.UseSession();
+
+// Use CORS
+app.UseCors("default");
 
 // Add authentication and authorization middleware
 app.UseAuthentication();
@@ -104,22 +146,38 @@ app.UseAuthorization();
 
 app.MapControllers();
 
+// Add SPA fallback route to handle client-side routing
+app.MapFallbackToFile("index.html");
+
 // Ensure Database and Graph Storage are initialized
 using (var scope = app.Services.CreateScope())
 {
-    var dbContext = scope.ServiceProvider.GetRequiredService<PathRagDbContext>();
-    var graphStorage = scope.ServiceProvider.GetRequiredService<IGraphStorageService>();
+    try
+    {
+        var dbContext = scope.ServiceProvider.GetRequiredService<PathRagDbContext>();
+        var graphStorage = scope.ServiceProvider.GetRequiredService<IGraphStorageService>();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
 
-    // Create database if it doesn't exist
-    await dbContext.Database.EnsureCreatedAsync();
+        // Ensure vector extension is installed first
+        logger.LogInformation("Installing PostgreSQL extensions...");
+        await dbContext.EnsureExtensionAsync();
 
-    // Ensure vector extension is installed
-    await dbContext.EnsureVectorExtensionAsync();
+        // Create database if it doesn't exist
+        logger.LogInformation("Creating database schema...");
+        await dbContext.Database.EnsureCreatedAsync();
 
-    // Initialize graph storage
-    await graphStorage.InitializeAsync();
+        // Initialize graph storage
+        logger.LogInformation("Initializing graph storage...");
+        await graphStorage.InitializeAsync();
 
-    app.Logger.LogInformation("Database and extensions initialized successfully");
+        logger.LogInformation("Database and extensions initialized successfully");
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "An error occurred while initializing the database");
+        throw; // Re-throw to prevent the application from starting with an improperly initialized database
+    }
 }
 
 app.Run();

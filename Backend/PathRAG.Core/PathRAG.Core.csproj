@@ -15,11 +15,13 @@
 		<PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="8.0.0" />
 		<PackageReference Include="Npgsql" Version="8.0.7" />
 		<PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.1" />
-		<PackageReference Include="SharpToken" Version="1.2.14" />
+		<PackageReference Include="QuikGraph" Version="2.5.0" />
+		<PackageReference Include="SharpToken" Version="2.0.3" />
 		<PackageReference Include="itext7" Version="8.0.2" />
 		<PackageReference Include="HtmlAgilityPack" Version="1.11.57" />
 		<PackageReference Include="Markdig" Version="0.34.0" />
 		<PackageReference Include="ClosedXML" Version="0.102.2" />
+		<PackageReference Include="VersOne.Epub" Version="3.3.3" />
 	</ItemGroup>
 
 	<ItemGroup>

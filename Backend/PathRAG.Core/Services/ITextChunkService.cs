@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using PathRAG.Core.Models;
 using SharpToken;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace PathRAG.Core.Services;
 
@@ -48,11 +49,14 @@ public class TextChunkService : ITextChunkService
             // Decode the tokens back to text
             var chunkContent = _encoding.Decode(chunkTokens);
 
+            // Sanitize the content to remove null bytes and other problematic characters
+            var sanitizedContent = SanitizeText(chunkContent.Trim());
+
             // Create the chunk
             results.Add(new TextChunk
             {
                 Id = Guid.NewGuid(),
-                Content = chunkContent.Trim(),
+                Content = sanitizedContent,
                 TokenCount = chunkTokens.Count,
                 ChunkOrderIndex = index,
                 FullDocumentId = Guid.NewGuid().ToString(), // This would be set by the caller
@@ -64,6 +68,26 @@ public class TextChunkService : ITextChunkService
         }
 
         return results;
+    }
+
+    private string SanitizeText(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        // Remove null bytes (0x00) which cause issues with PostgreSQL UTF-8 encoding
+        text = text.Replace("\0", "");
+
+        // Remove other control characters except for newlines and tabs
+        text = Regex.Replace(text, @"[\x00-\x08\x0B\x0C\x0E-\x1F]", "");
+
+        // Replace multiple whitespace characters with a single space
+        text = Regex.Replace(text, @"\s+", " ");
+
+        // Trim leading/trailing whitespace
+        return text.Trim();
     }
 
     private string GetTikTokenModelName(string modelName)

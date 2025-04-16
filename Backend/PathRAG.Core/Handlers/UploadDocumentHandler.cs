@@ -7,7 +7,9 @@ using PathRAG.Core.Services;
 using PathRAG.Core.Services.Embedding;
 using PathRAG.Core.Services.Entity;
 using PathRAG.Infrastructure.Data;
+using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace PathRAG.Core.Handlers;
 
@@ -18,6 +20,7 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
     private readonly IEmbeddingService _embeddingService;
     private readonly IEntityExtractionService _entityExtractionService;
     private readonly IRelationshipService _relationshipService;
+    private readonly IDocumentExtractor _documentExtractor;
     private readonly ILogger<UploadDocumentHandler> _logger;
 
     public UploadDocumentHandler(
@@ -26,6 +29,7 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
         IEmbeddingService embeddingService,
         IEntityExtractionService entityExtractionService,
         IRelationshipService relationshipService,
+        IDocumentExtractor documentExtractor,
         ILogger<UploadDocumentHandler> logger)
     {
         _dbContext = dbContext;
@@ -33,6 +37,7 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
         _embeddingService = embeddingService;
         _entityExtractionService = entityExtractionService;
         _relationshipService = relationshipService;
+        _documentExtractor = documentExtractor;
         _logger = logger;
     }
 
@@ -47,11 +52,36 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
             throw new KeyNotFoundException($"Vector store with ID {request.VectorStoreId} not found");
         }
 
-        // Read file content
+        // Extract text from the document using the document extractor
         string content;
-        using (var reader = new StreamReader(request.File.OpenReadStream(), Encoding.UTF8))
+        try
         {
-            content = await reader.ReadToEndAsync();
+            // Get the filename
+            string fileName = request.File.FileName;
+
+            // Check if the file type is supported
+            if (!_documentExtractor.IsSupported(fileName))
+            {
+                string fileExtension = Path.GetExtension(fileName);
+                throw new NotSupportedException($"File type {fileExtension} is not supported");
+            }
+
+            // Extract text from the document
+            using (var stream = request.File.OpenReadStream())
+            {
+                content = await _documentExtractor.ExtractTextAsync(stream, fileName, cancellationToken);
+            }
+
+            // Sanitize content to remove null bytes and other problematic characters
+            content = SanitizeText(content);
+
+            _logger.LogInformation("Successfully extracted text from {FileName} ({FileSize} bytes)",
+                request.File.FileName, request.File.Length);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error extracting text from {FileName}", request.File.FileName);
+            throw new InvalidOperationException($"Failed to extract text from {request.File.FileName}: {ex.Message}", ex);
         }
 
         // Generate document ID
@@ -59,7 +89,7 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
 
         // Process document
         var chunks = _textChunkService.ChunkDocument(content);
-        
+
         // Get embeddings for chunks
         var chunkTexts = chunks.Select(c => c.Content).ToList();
         var embeddings = await _embeddingService.GetEmbeddingsAsync(chunkTexts, cancellationToken);
@@ -67,14 +97,14 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
         // Extract entities and relationships
         var extractionResults = await _entityExtractionService.ExtractEntitiesAndRelationshipsAsync(content, cancellationToken);
         var entities = extractionResults.Entities;
-        
+
         // Get entity embeddings
         var entityTexts = entities.Select(e => $"{e.Name} {e.Description}").ToList();
         var entityEmbeddings = await _embeddingService.GetEmbeddingsAsync(entityTexts, cancellationToken);
-        
+
         // Extract relationships
         var relationships = await _relationshipService.ExtractRelationshipsAsync(entities, content, cancellationToken);
-        
+
         // Get relationship embeddings
         var relationshipTexts = relationships.Select(r => r.Description).ToList();
         var relationshipEmbeddings = await _embeddingService.GetEmbeddingsAsync(relationshipTexts, cancellationToken);
@@ -86,7 +116,7 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
             var chunk = new TextChunk
             {
                 Id = Guid.NewGuid(),
-                Content = chunks[i].Content,
+                Content = SanitizeText(chunks[i].Content),
                 Embedding = embeddings[i],
                 TokenCount = chunks[i].TokenCount,
                 FullDocumentId = documentId,
@@ -94,7 +124,7 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
                 VectorStoreId = vectorStore.Id,
                 CreatedAt = DateTime.UtcNow
             };
-            
+
             textChunks.Add(chunk);
             await _dbContext.TextChunks.AddAsync(chunk, cancellationToken);
         }
@@ -105,9 +135,9 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
             var entity = new GraphEntity
             {
                 Id = Guid.NewGuid(),
-                Name = entities[i].Name,
-                Type = entities[i].Type,
-                Description = entities[i].Description,
+                Name = SanitizeText(entities[i].Name),
+                Type = SanitizeText(entities[i].Type),
+                Description = SanitizeText(entities[i].Description),
                 Embedding = entityEmbeddings[i],
                 Keywords = entities[i].Keywords,
                 Weight = entities[i].Weight,
@@ -115,7 +145,7 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
                 VectorStoreId = vectorStore.Id,
                 CreatedAt = DateTime.UtcNow
             };
-            
+
             await _dbContext.Entities.AddAsync(entity, cancellationToken);
         }
 
@@ -127,8 +157,8 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
                 Id = Guid.NewGuid(),
                 SourceEntityId = relationships[i].SourceEntityId,
                 TargetEntityId = relationships[i].TargetEntityId,
-                Type = relationships[i].Type,
-                Description = relationships[i].Description,
+                Type = SanitizeText(relationships[i].Type),
+                Description = SanitizeText(relationships[i].Description),
                 Embedding = i < relationshipEmbeddings.Count ? relationshipEmbeddings[i] : Array.Empty<float>(),
                 Weight = relationships[i].Weight,
                 Keywords = relationships[i].Keywords,
@@ -136,12 +166,32 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
                 VectorStoreId = vectorStore.Id,
                 CreatedAt = DateTime.UtcNow
             };
-            
+
             await _dbContext.Relationships.AddAsync(relationship, cancellationToken);
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
-        
+
         return textChunks.ToArray();
+    }
+
+    private string SanitizeText(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        // Remove null bytes (0x00) which cause issues with PostgreSQL UTF-8 encoding
+        text = text.Replace("\0", "");
+
+        // Remove other control characters except for newlines and tabs
+        text = Regex.Replace(text, @"[\x00-\x08\x0B\x0C\x0E-\x1F]", "");
+
+        // Replace multiple whitespace characters with a single space
+        text = Regex.Replace(text, @"\s+", " ");
+
+        // Trim leading/trailing whitespace
+        return text.Trim();
     }
 }

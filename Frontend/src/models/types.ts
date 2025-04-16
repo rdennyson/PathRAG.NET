@@ -67,6 +67,7 @@ export interface Relationship {
   targetEntityId: string;
   type: string;
   description: string;
+  weight: number;
   vectorStoreId: string;
 }
 

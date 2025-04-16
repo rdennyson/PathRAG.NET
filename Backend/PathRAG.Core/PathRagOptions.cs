@@ -25,7 +25,8 @@ public class PathRagOptions
     public int ChunkOverlap { get; set; } = 100;
 
     // Query Settings
-    public int MaxTokens { get; set; } = 32768;
+    public int MaxTokens { get; set; } = 4096; // Reduced from 32768 to avoid context length issues
+    public int MaxInputTokens { get; set; } = 100000; // Maximum input tokens for entity extraction
     public float Temperature { get; set; } = 0.7f;
     public int TopK { get; set; } = 40;
 
@@ -33,4 +34,9 @@ public class PathRagOptions
     public bool EnableEmbeddingCache { get; set; } = true;
     public bool EnableLLMResponseCache { get; set; } = true;
     public int CacheExpirationMinutes { get; set; } = 60;
+
+    // Similarity-based Caching Settings
+    public bool EnableSimilarityCache { get; set; } = true;
+    public float SimilarityThreshold { get; set; } = 0.95f;
+    public bool UseLLMCheckForSimilarity { get; set; } = false;
 }

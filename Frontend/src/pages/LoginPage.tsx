@@ -21,7 +21,7 @@ const LoginPage: React.FC = () => {
         <FlexboxGrid justify="center" align="middle" className="h-screen">
           <FlexboxGrid.Item colspan={12}>
             <Panel
-              header={<h2 className="text-center">Welcome to PathRAG</h2>}
+              header="Welcome to PathRAG"
               bordered
               className="bg-white dark:bg-gray-800 shadow-lg rounded-lg"
             >

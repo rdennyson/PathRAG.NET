@@ -16,4 +16,13 @@ public interface IGraphStorageService
     Task<float[]> EmbedNodesAsync(string algorithm = "node2vec", CancellationToken cancellationToken = default);
     Task<IEnumerable<object>> GetRelatedNodesAsync(string keyword, CancellationToken cancellationToken = default);
     Task<List<Relationship>> FindShortestPathAsync(string sourceEntityId, string targetEntityId, CancellationToken cancellationToken = default);
+
+    // New methods for graph visualization
+    Task<GraphData> GetGraphDataAsync(string label = "*", int maxDepth = 2, int maxNodes = 100, CancellationToken cancellationToken = default);
+    Task<IEnumerable<string>> GetLabelsAsync(CancellationToken cancellationToken = default);
+    Task<GraphEntity> GetEntityAsync(string id, CancellationToken cancellationToken = default);
+    Task<IEnumerable<Relationship>> GetEntityRelationshipsAsync(string id, CancellationToken cancellationToken = default);
+    Task<GraphEntity> UpdateEntityAsync(GraphEntity entity, CancellationToken cancellationToken = default);
+    Task<Relationship> UpdateRelationshipAsync(Relationship relationship, CancellationToken cancellationToken = default);
+    Task<IDictionary<string, float>> RunPageRankAsync(CancellationToken cancellationToken = default);
 }

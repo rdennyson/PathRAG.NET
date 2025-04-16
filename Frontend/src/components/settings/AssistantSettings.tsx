@@ -110,15 +110,14 @@ const AssistantSettings: React.FC = () => {
             <Form.Group>
               <Form.ControlLabel>Select Assistant</Form.ControlLabel>
               <SelectPicker
-                data={[
-                  { label: 'Create New Assistant', value: '' },
-                  ...assistants.map(assistant => ({
-                    label: assistant.name,
-                    value: assistant.id
-                  }))
-                ]}
+                data={assistants.map(a => ({
+                  label: a.name,
+                  value: a.id
+                }))}
                 value={selectedAssistantId}
-                onChange={handleSelectAssistant}
+                onChange={(value, _event) => {
+                  if (value) handleSelectAssistant(value);
+                }}
                 block
                 cleanable={false}
               />
@@ -194,3 +193,4 @@ const AssistantSettings: React.FC = () => {
 };
 
 export default AssistantSettings;
+

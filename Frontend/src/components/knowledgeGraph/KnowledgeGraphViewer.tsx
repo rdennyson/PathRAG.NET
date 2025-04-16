@@ -1,38 +1,58 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Panel, Loader, SelectPicker, Button, Modal, Form, Input } from 'rsuite';
-import { FaSearch, FaInfoCircle } from 'react-icons/fa';
+import { Loader, SelectPicker, Button, Modal, Form, Input, InputGroup } from 'rsuite';
+import { ForceGraph2D } from 'react-force-graph';
+import { FaSearch, FaInfoCircle, FaSearchPlus, FaSearchMinus, FaSync, FaCog } from 'react-icons/fa';
 import { useApp } from '../../contexts/AppContext';
 import { GraphEntity, Relationship } from '../../models/types';
 import apiService from '../../services/api';
 
-// This would be replaced with a proper graph visualization library like Cytoscape.js or vis.js
-// For now, we'll create a simplified version
-const KnowledgeGraphViewer: React.FC = () => {
+interface KnowledgeGraphViewerProps {
+  entityType?: string;
+  maxDepth?: number;
+  maxNodes?: number;
+  searchQuery?: string;
+}
+
+const KnowledgeGraphViewer: React.FC<KnowledgeGraphViewerProps> = ({
+  entityType = '*',
+  maxDepth = 2,
+  maxNodes = 100,
+  searchQuery: initialSearchQuery = ''
+}) => {
   const { vectorStores } = useApp();
   const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string>('');
   const [entities, setEntities] = useState<GraphEntity[]>([]);
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [searchTerm, setSearchTerm] = useState<string>(initialSearchQuery);
   const [selectedEntity, setSelectedEntity] = useState<GraphEntity | null>(null);
   const [showEntityDetails, setShowEntityDetails] = useState<boolean>(false);
-  
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Force Graph specific states
+  const [graphData, setGraphData] = useState<{ nodes: any[], links: any[] }>({ nodes: [], links: [] });
+  const [highlightNodes, setHighlightNodes] = useState<Set<string>>(new Set());
+  const [highlightLinks, setHighlightLinks] = useState<Set<any>>(new Set());
+  const [, setHoverNode] = useState<any>(null);
+
+  const fgRef = useRef<any>();
 
   useEffect(() => {
     if (selectedVectorStoreId) {
       loadGraphData();
+    } else if (vectorStores.length > 0) {
+      setSelectedVectorStoreId(vectorStores[0].id);
     } else {
       setEntities([]);
       setRelationships([]);
+      setGraphData({ nodes: [], links: [] });
     }
-  }, [selectedVectorStoreId]);
+  }, [selectedVectorStoreId, entityType, maxDepth, maxNodes]);
 
   useEffect(() => {
-    if (entities.length > 0 && relationships.length > 0) {
-      renderGraph();
+    if (searchTerm !== initialSearchQuery) {
+      setSearchTerm(initialSearchQuery);
     }
-  }, [entities, relationships, searchTerm]);
+  }, [initialSearchQuery]);
 
   const loadGraphData = async () => {
     setIsLoading(true);
@@ -41,9 +61,42 @@ const KnowledgeGraphViewer: React.FC = () => {
         apiService.getEntities(selectedVectorStoreId),
         apiService.getRelationships(selectedVectorStoreId)
       ]);
-      
-      setEntities(entitiesData);
+
+      // Filter by entity type if specified
+      const filteredEntities = entityType === '*'
+        ? entitiesData
+        : entitiesData.filter(e => e.type.toLowerCase() === entityType.toLowerCase());
+
+      setEntities(filteredEntities);
       setRelationships(relationshipsData);
+
+      // Transform data for force graph visualization
+      const nodes = filteredEntities.map(entity => ({
+        id: entity.id,
+        name: entity.name,
+        type: entity.type,
+        description: entity.description,
+        color: getNodeColorByType(entity.type),
+        val: 1 // Size factor
+      }));
+
+      const entityIds = new Set(nodes.map(n => n.id));
+
+      // Only include relationships where both source and target are in our filtered entities
+      const links = relationshipsData
+        .filter(rel =>
+          entityIds.has(rel.sourceEntityId) &&
+          entityIds.has(rel.targetEntityId)
+        )
+        .map(rel => ({
+          source: rel.sourceEntityId,
+          target: rel.targetEntityId,
+          type: rel.type,
+          description: rel.description,
+          value: rel.weight || 1
+        }));
+
+      setGraphData({ nodes, links });
     } catch (error) {
       console.error('Failed to load graph data:', error);
     } finally {
@@ -51,136 +104,101 @@ const KnowledgeGraphViewer: React.FC = () => {
     }
   };
 
-  const renderGraph = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Filter entities and relationships based on search term
-    const filteredEntities = searchTerm
-      ? entities.filter(e => 
-          e.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          e.description.toLowerCase().includes(searchTerm.toLowerCase())
-        )
-      : entities;
-
-    const filteredRelationships = searchTerm
-      ? relationships.filter(r => {
-          const sourceEntity = entities.find(e => e.id === r.sourceEntityId);
-          const targetEntity = entities.find(e => e.id === r.targetEntityId);
-          
-          return (
-            sourceEntity && targetEntity && (
-              sourceEntity.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-              targetEntity.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-              r.type.toLowerCase().includes(searchTerm.toLowerCase()) ||
-              r.description.toLowerCase().includes(searchTerm.toLowerCase())
-            )
-          );
-        })
-      : relationships;
-
-    // Create a map of entity positions
-    const entityPositions = new Map<string, { x: number, y: number }>();
-    
-    // Position entities in a circle
-    const centerX = canvas.width / 2;
-    const centerY = canvas.height / 2;
-    const radius = Math.min(centerX, centerY) - 50;
-    
-    filteredEntities.forEach((entity, index) => {
-      const angle = (index / filteredEntities.length) * 2 * Math.PI;
-      const x = centerX + radius * Math.cos(angle);
-      const y = centerY + radius * Math.sin(angle);
-      
-      entityPositions.set(entity.id, { x, y });
-    });
-
-    // Draw relationships
-    ctx.strokeStyle = '#673ab7';
-    ctx.lineWidth = 2;
-    
-    filteredRelationships.forEach(relationship => {
-      const sourcePos = entityPositions.get(relationship.sourceEntityId);
-      const targetPos = entityPositions.get(relationship.targetEntityId);
-      
-      if (sourcePos && targetPos) {
-        // Draw line
-        ctx.beginPath();
-        ctx.moveTo(sourcePos.x, sourcePos.y);
-        ctx.lineTo(targetPos.x, targetPos.y);
-        ctx.stroke();
-        
-        // Draw relationship type
-        const midX = (sourcePos.x + targetPos.x) / 2;
-        const midY = (sourcePos.y + targetPos.y) / 2;
-        
-        ctx.fillStyle = '#673ab7';
-        ctx.font = '10px Arial';
-        ctx.fillText(relationship.type, midX, midY);
-      }
-    });
-
-    // Draw entities
-    filteredEntities.forEach(entity => {
-      const pos = entityPositions.get(entity.id);
-      if (!pos) return;
-      
-      // Draw circle
-      ctx.beginPath();
-      ctx.arc(pos.x, pos.y, 20, 0, 2 * Math.PI);
-      
-      // Color based on entity type
-      switch (entity.type.toLowerCase()) {
-        case 'person':
-          ctx.fillStyle = '#3498ff';
-          break;
-        case 'organization':
-          ctx.fillStyle = '#ff5733';
-          break;
-        case 'location':
-          ctx.fillStyle = '#27ae60';
-          break;
-        case 'concept':
-          ctx.fillStyle = '#f1c40f';
-          break;
-        default:
-          ctx.fillStyle = '#95a5a6';
-      }
-      
-      ctx.fill();
-      
-      // Draw entity name
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 10px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText(entity.name, pos.x, pos.y);
-    });
-
-    // Add click handler to canvas
-    canvas.onclick = (event) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
-      
-      // Check if click is on an entity
-      for (const entity of filteredEntities) {
-        const pos = entityPositions.get(entity.id);
-        if (!pos) continue;
-        
-        const distance = Math.sqrt(Math.pow(x - pos.x, 2) + Math.pow(y - pos.y, 2));
-        if (distance <= 20) {
-          setSelectedEntity(entity);
-          setShowEntityDetails(true);
-          break;
-        }
-      }
+  const getNodeColorByType = (type: string): string => {
+    const typeColors: Record<string, string> = {
+      'person': '#FF6B6B',
+      'organization': '#4ECDC4',
+      'location': '#FFD166',
+      'concept': '#6A0572',
+      'technology': '#1A535C',
+      'system': '#3A86FF',
+      'process': '#8338EC'
     };
+
+    return typeColors[type?.toLowerCase()] || '#999999';
+  };
+
+  const handleNodeClick = (node: any) => {
+    const entity = entities.find(e => e.id === node.id);
+    if (entity) {
+      setSelectedEntity(entity);
+      setShowEntityDetails(true);
+    }
+
+    // Highlight connected nodes and links
+    const connectedNodes = new Set<string>();
+    const connectedLinks = new Set<any>();
+
+    graphData.links.forEach(link => {
+      if (link.source.id === node.id || link.target.id === node.id) {
+        connectedNodes.add(link.source.id);
+        connectedNodes.add(link.target.id);
+        connectedLinks.add(link);
+      }
+    });
+
+    setHighlightNodes(connectedNodes);
+    setHighlightLinks(connectedLinks);
+
+    // Center view on node
+    if (fgRef.current) {
+      fgRef.current.centerAt(node.x, node.y, 1000);
+      fgRef.current.zoom(2.5, 1000);
+    }
+  };
+
+  const handleNodeHover = (node: any) => {
+    setHoverNode(node);
+    if (!node) return;
+
+    // Highlight connected nodes and links on hover
+    const connectedNodes = new Set<string>();
+    const connectedLinks = new Set<any>();
+
+    if (node) {
+      connectedNodes.add(node.id);
+      graphData.links.forEach(link => {
+        if (link.source.id === node.id || link.target.id === node.id) {
+          connectedNodes.add(link.source.id);
+          connectedNodes.add(link.target.id);
+          connectedLinks.add(link);
+        }
+      });
+    }
+
+    setHighlightNodes(connectedNodes);
+    setHighlightLinks(connectedLinks);
+  };
+
+  const handleSearch = () => {
+    if (!searchTerm) return;
+
+    const foundNode = graphData.nodes.find(node =>
+      node.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    if (foundNode) {
+      handleNodeClick(foundNode);
+    }
+  };
+
+  const handleZoomIn = () => {
+    if (fgRef.current) {
+      fgRef.current.zoom(fgRef.current.zoom() * 1.5, 800);
+    }
+  };
+
+  const handleZoomOut = () => {
+    if (fgRef.current) {
+      fgRef.current.zoom(fgRef.current.zoom() / 1.5, 800);
+    }
+  };
+
+  const handleRefresh = () => {
+    loadGraphData();
+    setSelectedEntity(null);
+    setHighlightNodes(new Set());
+    setHighlightLinks(new Set());
   };
 
   return (
@@ -193,42 +211,108 @@ const KnowledgeGraphViewer: React.FC = () => {
               value: vs.id
             }))}
             value={selectedVectorStoreId}
-            onChange={setSelectedVectorStoreId}
+            onChange={(value, _event) => {
+              if (value) setSelectedVectorStoreId(value);
+            }}
             placeholder="Select a vector store"
             className="w-64 mr-4"
             searchable={false}
           />
-          
+
           <div className="relative flex-grow">
-            <Input
-              placeholder="Search entities and relationships..."
-              value={searchTerm}
-              onChange={setSearchTerm}
-              className="pr-10"
-            />
-            <FaSearch className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+            <InputGroup inside>
+              <Input
+                placeholder="Search entities and relationships..."
+                value={searchTerm}
+                onChange={setSearchTerm}
+                onPressEnter={handleSearch}
+              />
+              <InputGroup.Button onClick={handleSearch}>
+                <FaSearch />
+              </InputGroup.Button>
+            </InputGroup>
           </div>
         </div>
-        
+
         <div className="text-sm text-gray-500">
           <FaInfoCircle className="mr-1" />
           Click on an entity to view details
         </div>
       </div>
-      
+
       <div className="flex-grow relative">
         {isLoading ? (
           <Loader center content="Loading knowledge graph..." />
         ) : (
-          <canvas
-            ref={canvasRef}
-            width={800}
-            height={600}
-            className="w-full h-full"
-          />
+          <>
+            <ForceGraph2D
+              ref={fgRef}
+              graphData={graphData}
+              nodeLabel={node => `${node.name} (${node.type})`}
+              nodeColor={node =>
+                highlightNodes.size > 0
+                  ? highlightNodes.has(node.id)
+                    ? node.color
+                    : 'rgba(200,200,200,0.3)'
+                  : node.color
+              }
+              linkWidth={link => highlightLinks.has(link) ? 3 : 1}
+              linkColor={link => highlightLinks.has(link) ? '#ff5722' : '#999999'}
+              nodeCanvasObject={(node, ctx, globalScale) => {
+                const label = node.name;
+                const fontSize = 12/globalScale;
+                ctx.font = `${fontSize}px Sans-Serif`;
+                const textWidth = ctx.measureText(label).width;
+                const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.2);
+
+                // Node circle
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, 5, 0, 2 * Math.PI, false);
+                ctx.fillStyle = node.color;
+                ctx.fill();
+
+                // Text background
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.fillRect(
+                  node.x - bckgDimensions[0] / 2,
+                  node.y + 8,
+                  bckgDimensions[0],
+                  bckgDimensions[1]
+                );
+
+                // Text
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle = '#000000';
+                ctx.fillText(label, node.x, node.y + 8 + fontSize / 2);
+              }}
+              onNodeClick={handleNodeClick}
+              onNodeHover={handleNodeHover}
+              cooldownTicks={100}
+              linkDirectionalArrowLength={3.5}
+              linkDirectionalArrowRelPos={1}
+              linkCurvature={0.25}
+            />
+
+            {/* Controls */}
+            <div className="absolute bottom-4 left-4 flex flex-col gap-2">
+              <Button appearance="primary" onClick={handleZoomIn} size="sm">
+                <FaSearchPlus />
+              </Button>
+              <Button appearance="primary" onClick={handleZoomOut} size="sm">
+                <FaSearchMinus />
+              </Button>
+              <Button appearance="primary" onClick={handleRefresh} size="sm">
+                <FaSync />
+              </Button>
+              <Button appearance="primary" size="sm">
+                <FaCog />
+              </Button>
+            </div>
+          </>
         )}
       </div>
-      
+
       <Modal open={showEntityDetails} onClose={() => setShowEntityDetails(false)}>
         <Modal.Header>
           <Modal.Title>{selectedEntity?.name}</Modal.Title>
@@ -238,32 +322,37 @@ const KnowledgeGraphViewer: React.FC = () => {
             <Form fluid>
               <Form.Group>
                 <Form.ControlLabel>Type</Form.ControlLabel>
-                <Form.Control readOnly value={selectedEntity.type} />
+                <Form.Control
+                  name="entityType"
+                  readOnly
+                  value={selectedEntity.type}
+                />
               </Form.Group>
-              
+
               <Form.Group>
                 <Form.ControlLabel>Description</Form.ControlLabel>
                 <Form.Control
+                  name="entityDescription"
                   readOnly
                   value={selectedEntity.description}
                   as="textarea"
                   rows={3}
                 />
               </Form.Group>
-              
+
               <Form.Group>
                 <Form.ControlLabel>Related Entities</Form.ControlLabel>
                 <ul className="list-disc pl-5">
                   {relationships
-                    .filter(r => 
-                      r.sourceEntityId === selectedEntity.id || 
+                    .filter(r =>
+                      r.sourceEntityId === selectedEntity.id ||
                       r.targetEntityId === selectedEntity.id
                     )
                     .map(r => {
                       const isSource = r.sourceEntityId === selectedEntity.id;
                       const relatedEntityId = isSource ? r.targetEntityId : r.sourceEntityId;
                       const relatedEntity = entities.find(e => e.id === relatedEntityId);
-                      
+
                       return (
                         <li key={r.id}>
                           {isSource ? 'Has' : 'Is'} <strong>{r.type}</strong> {isSource ? 'to' : 'of'}{' '}
@@ -288,3 +377,6 @@ const KnowledgeGraphViewer: React.FC = () => {
 };
 
 export default KnowledgeGraphViewer;
+
+
+
