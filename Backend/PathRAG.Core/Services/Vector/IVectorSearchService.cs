@@ -7,15 +7,18 @@ public interface IVectorSearchService
     Task<IReadOnlyList<TextChunk>> SearchTextChunksAsync(
         float[] queryEmbedding,
         int topK,
-        CancellationToken cancellationToken = default);
-        
+        CancellationToken cancellationToken = default,
+        List<Guid>? vectorStoreIds = null);
+
     Task<IList<GraphEntity>> SearchEntitiesAsync(
         float[] queryEmbedding,
         int topK,
-        CancellationToken cancellationToken = default);
-        
+        CancellationToken cancellationToken = default,
+        List<Guid>? vectorStoreIds = null);
+
     Task<IReadOnlyList<Relationship>> SearchRelationshipsAsync(
         float[] queryEmbedding,
         int topK,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        List<Guid>? vectorStoreIds = null);
 }

@@ -27,7 +27,7 @@ public class QueryController : ControllerBase
     public async Task<ActionResult<QueryResponseDto>> Query(QueryRequest request)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        
+
         var command = new QueryCommand
         {
             Query = request.Query,
@@ -36,17 +36,17 @@ public class QueryController : ControllerBase
             AssistantId = request.AssistantId,
             UserId = userId
         };
-        
+
         try
         {
             var result = await _mediator.Send(command);
-            
+
             var response = new QueryResponseDto
             {
                 Answer = result.Answer,
                 Sources = result.Sources
             };
-            
+
             if (result.Entities != null && result.Entities.Count > 0)
             {
                 response.Entities = result.Entities.Select(e => new GraphEntityDto
@@ -58,7 +58,7 @@ public class QueryController : ControllerBase
                     VectorStoreId = e.VectorStoreId
                 }).ToList();
             }
-            
+
             if (result.Relationships != null && result.Relationships.Count > 0)
             {
                 response.Relationships = result.Relationships.Select(r => new RelationshipDto
@@ -71,7 +71,7 @@ public class QueryController : ControllerBase
                     VectorStoreId = r.VectorStoreId
                 }).ToList();
             }
-            
+
             return Ok(response);
         }
         catch (KeyNotFoundException)

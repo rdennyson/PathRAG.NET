@@ -170,12 +170,11 @@ public class HybridQueryService : IHybridQueryService
             var chunks = await _vectorSearchService.SearchTextChunksAsync(
                 queryEmbedding,
                 topK,
-                cancellationToken);
+                cancellationToken,
+                vectorStoreIds);
 
-            // Filter by vector store IDs
-            return chunks
-                .Where(c => vectorStoreIds.Contains(c.VectorStoreId))
-                .ToList();
+            // Vector store filtering is now done in the search service
+            return chunks.ToList();
         }
         catch (Exception ex)
         {
@@ -197,7 +196,8 @@ public class HybridQueryService : IHybridQueryService
             var vectorResults = await _vectorSearchService.SearchTextChunksAsync(
                 queryEmbedding,
                 topK,
-                cancellationToken);
+                cancellationToken,
+                vectorStoreIds);
 
             // Perform keyword search
             var keywordResults = await _dbContext.TextChunks
@@ -212,7 +212,7 @@ public class HybridQueryService : IHybridQueryService
 
             foreach (var chunk in vectorResults)
             {
-                if (!combinedResults.Any(c => c.Id == chunk.Id) && vectorStoreIds.Contains(chunk.VectorStoreId))
+                if (!combinedResults.Any(c => c.Id == chunk.Id))
                 {
                     combinedResults.Add(chunk);
                 }
@@ -249,12 +249,11 @@ public class HybridQueryService : IHybridQueryService
             var entities = await _vectorSearchService.SearchEntitiesAsync(
                 queryEmbedding,
                 topK,
-                cancellationToken);
+                cancellationToken,
+                vectorStoreIds);
 
-            // Filter entities by vector store IDs
-            entities = entities
-                .Where(e => vectorStoreIds.Contains(e.VectorStoreId))
-                .ToList();
+            // Vector store filtering is now done in the search service
+            entities = entities.ToList();
 
             // Also search for entities by name
             var keywordEntities = await _dbContext.Entities

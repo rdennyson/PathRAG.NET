@@ -31,44 +31,51 @@ public class VectorSearchService : IVectorSearchService
     public async Task<IReadOnlyList<TextChunk>> SearchTextChunksAsync(
         float[] queryEmbedding,
         int topK,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        List<Guid>? vectorStoreIds = null)
     {
         return await PerformVectorSearchAsync<TextChunk>(
             "TextChunks",
             queryEmbedding,
             topK,
-            cancellationToken);
+            cancellationToken,
+            vectorStoreIds);
     }
 
     public async Task<IList<GraphEntity>> SearchEntitiesAsync(
         float[] queryEmbedding,
         int topK,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        List<Guid>? vectorStoreIds = null)
     {
         return await PerformVectorSearchAsync<GraphEntity>(
             "Entities",
             queryEmbedding,
             topK,
-            cancellationToken);
+            cancellationToken,
+            vectorStoreIds);
     }
 
     public async Task<IReadOnlyList<Relationship>> SearchRelationshipsAsync(
         float[] queryEmbedding,
         int topK,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        List<Guid>? vectorStoreIds = null)
     {
         return await PerformVectorSearchAsync<Relationship>(
             "Relationships",
             queryEmbedding,
             topK,
-            cancellationToken);
+            cancellationToken,
+            vectorStoreIds);
     }
 
     private async Task<List<T>> PerformVectorSearchAsync<T>(
         string tableName,
         float[] queryEmbedding,
         int topK,
-        CancellationToken cancellationToken) where T : class, new()
+        CancellationToken cancellationToken,
+        List<Guid>? vectorStoreIds = null) where T : class, new()
     {
         var results = new List<T>();
 
@@ -88,7 +95,14 @@ public class VectorSearchService : IVectorSearchService
             embeddingStr.Append("]");
 
             // Use pgvector's cosine distance operator <=> for similarity search
-            var sql = $@"SELECT * FROM ""{tableName}"" ORDER BY embedding <=> '{embeddingStr}'::vector LIMIT {topK}";
+            string whereClause = "";
+            if (vectorStoreIds != null && vectorStoreIds.Count > 0 && (typeof(T) == typeof(TextChunk) || typeof(T) == typeof(GraphEntity) || typeof(T) == typeof(Relationship)))
+            {
+                string ids = string.Join(",", vectorStoreIds.Select(id => $"'{id}'"));
+                whereClause = $" WHERE \"VectorStoreId\" IN ({ids})";
+            }
+
+            var sql = $@"SELECT * FROM ""{tableName}""{whereClause} ORDER BY embedding <=> '{embeddingStr}'::vector LIMIT {topK}";
 
             await using var cmd = new NpgsqlCommand(sql, connection);
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
@@ -96,7 +110,7 @@ public class VectorSearchService : IVectorSearchService
             while (await reader.ReadAsync(cancellationToken))
             {
                 var item = new T();
-                
+
                 // Use reflection to set properties
                 var properties = typeof(T).GetProperties();
                 foreach (var property in properties)
@@ -147,7 +161,7 @@ public class VectorSearchService : IVectorSearchService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Error setting property {PropertyName} for type {TypeName}", 
+                        _logger.LogWarning(ex, "Error setting property {PropertyName} for type {TypeName}",
                             property.Name, typeof(T).Name);
                     }
                 }
@@ -158,45 +172,92 @@ public class VectorSearchService : IVectorSearchService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Vector search error for type {TypeName}", typeof(T).Name);
-            
+
             // Fallback to EF Core with in-memory cosine similarity
             if (typeof(T) == typeof(TextChunk))
             {
-                var chunks = await _dbContext.TextChunks
-                    .OrderByDescending(c => CosineSimilarity(c.Embedding, queryEmbedding))
+                // Fetch chunks with a reasonable limit to avoid loading the entire database
+                // We'll fetch more than topK to ensure we have enough for similarity ranking
+                int fetchLimit = Math.Min(topK * 10, 1000); // Fetch at most 1000 chunks
+                var query = _dbContext.TextChunks.AsQueryable();
+
+                // Apply vector store filter if provided
+                if (vectorStoreIds != null && vectorStoreIds.Count > 0)
+                {
+                    query = query.Where(c => vectorStoreIds.Contains(c.VectorStoreId));
+                }
+
+                var chunks = await query.Take(fetchLimit).ToListAsync(cancellationToken);
+
+                // Then calculate similarity and sort in memory
+                var sortedChunks = chunks
+                    .Select(c => new { Chunk = c, Similarity = CosineSimilarity(((TextChunk)c).Embedding, queryEmbedding) })
+                    .OrderByDescending(x => x.Similarity)
                     .Take(topK)
-                    .ToListAsync(cancellationToken);
-                    
-                results.AddRange(chunks as IEnumerable<T>);
+                    .Select(x => x.Chunk)
+                    .ToList();
+
+                results.AddRange(sortedChunks as IEnumerable<T>);
             }
             else if (typeof(T) == typeof(GraphEntity))
             {
-                var entities = await _dbContext.Entities
-                    .OrderByDescending(e => CosineSimilarity(e.Embedding, queryEmbedding))
+                // Fetch entities with a reasonable limit
+                int fetchLimit = Math.Min(topK * 10, 1000); // Fetch at most 1000 entities
+                var query = _dbContext.Entities.AsQueryable();
+
+                // Apply vector store filter if provided
+                if (vectorStoreIds != null && vectorStoreIds.Count > 0)
+                {
+                    query = query.Where(e => vectorStoreIds.Contains(e.VectorStoreId));
+                }
+
+                var entities = await query.Take(fetchLimit).ToListAsync(cancellationToken);
+
+                // Then calculate similarity and sort in memory
+                var sortedEntities = entities
+                    .Select(e => new { Entity = e, Similarity = CosineSimilarity(((GraphEntity)e).Embedding, queryEmbedding) })
+                    .OrderByDescending(x => x.Similarity)
                     .Take(topK)
-                    .ToListAsync(cancellationToken);
-                    
-                results.AddRange(entities as IEnumerable<T>);
+                    .Select(x => x.Entity)
+                    .ToList();
+
+                results.AddRange(sortedEntities as IEnumerable<T>);
             }
             else if (typeof(T) == typeof(Relationship))
             {
-                var relationships = await _dbContext.Relationships
-                    .OrderByDescending(r => CosineSimilarity(r.Embedding, queryEmbedding))
+                // Fetch relationships with a reasonable limit
+                int fetchLimit = Math.Min(topK * 10, 1000); // Fetch at most 1000 relationships
+                var query = _dbContext.Relationships.AsQueryable();
+
+                // Apply vector store filter if provided
+                if (vectorStoreIds != null && vectorStoreIds.Count > 0)
+                {
+                    query = query.Where(r => vectorStoreIds.Contains(r.VectorStoreId));
+                }
+
+                var relationships = await query.Take(fetchLimit).ToListAsync(cancellationToken);
+
+                // Then calculate similarity and sort in memory
+                var sortedRelationships = relationships
+                    .Select(r => new { Relationship = r, Similarity = CosineSimilarity(((Relationship)r).Embedding, queryEmbedding) })
+                    .OrderByDescending(x => x.Similarity)
                     .Take(topK)
-                    .ToListAsync(cancellationToken);
-                    
-                results.AddRange(relationships as IEnumerable<T>);
+                    .Select(x => x.Relationship)
+                    .ToList();
+
+                results.AddRange(sortedRelationships as IEnumerable<T>);
             }
         }
 
         return results;
     }
-    
+
     private static float CosineSimilarity(float[] a, float[] b)
     {
-        if (a.Length == 0 || b.Length == 0 || a.Length != b.Length)
+        // Handle null or empty arrays
+        if (a == null || b == null || a.Length == 0 || b.Length == 0 || a.Length != b.Length)
             return 0;
-            
+
         float dotProduct = 0;
         float normA = 0;
         float normB = 0;
@@ -208,6 +269,8 @@ public class VectorSearchService : IVectorSearchService
             normB += b[i] * b[i];
         }
 
-        return dotProduct / (float)(Math.Sqrt(normA) * Math.Sqrt(normB));
+        // Avoid division by zero
+        float denominator = (float)(Math.Sqrt(normA) * Math.Sqrt(normB));
+        return denominator > 0 ? dotProduct / denominator : 0;
     }
 }
