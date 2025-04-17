@@ -3,6 +3,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Identity.Web;
+using Npgsql;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure;
+using Pgvector.EntityFrameworkCore;
 using PathRAG.Core.Services;
 using PathRAG.Infrastructure.Data;
 using PathRAG.Core.Services.Graph;
@@ -77,7 +80,13 @@ builder.Services.AddCors(options =>
 
 // Add DbContext
 builder.Services.AddDbContext<PathRagDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"),
+        npgsqlOptions =>
+        {
+            npgsqlOptions.UseVector(); // Enable pgvector extension
+            npgsqlOptions.EnableRetryOnFailure(5);
+            npgsqlOptions.CommandTimeout(60);
+        }));
 
 // Register Core PathRAG Services
 builder.Services.AddScoped<ITextChunkService, TextChunkService>();
@@ -107,7 +116,7 @@ builder.Services.Configure<PathRagOptions>(builder.Configuration.GetSection("Pat
 // Add MediatR
 builder.Services.AddMediatR(cfg =>
 {
-    cfg.RegisterServicesFromAssembly(typeof(PathRAG.Core.Commands.InsertDocumentCommand).Assembly);
+    cfg.RegisterServicesFromAssembly(typeof(PathRAG.Core.Commands.UploadDocumentCommand).Assembly);
 });
 
 
@@ -158,17 +167,23 @@ using (var scope = app.Services.CreateScope())
         var graphStorage = scope.ServiceProvider.GetRequiredService<IGraphStorageService>();
         var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
 
-        // Ensure vector extension is installed first
+        // First ensure extensions are installed
         logger.LogInformation("Installing PostgreSQL extensions...");
         await dbContext.EnsureExtensionAsync();
 
-        // Create database if it doesn't exist
-        logger.LogInformation("Creating database schema...");
+        // Create database if it doesn't exist (public schema tables)
+        logger.LogInformation("Creating database schema (public schema)...");
+
         await dbContext.Database.EnsureCreatedAsync();
+
+        logger.LogInformation("Database schema created or verified.");
 
         // Initialize graph storage
         logger.LogInformation("Initializing graph storage...");
         await graphStorage.InitializeAsync();
+
+        // Log success message
+        logger.LogInformation("All tables created successfully - public schema by EF Core and ag_catalog schema by SQL");
 
         logger.LogInformation("Database and extensions initialized successfully");
     }

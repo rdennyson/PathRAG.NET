@@ -1,4 +1,4 @@
-namespace PathRAG.Core.Models;
+namespace PathRAG.Infrastructure.Models;
 
 public class ExtractionResult
 {

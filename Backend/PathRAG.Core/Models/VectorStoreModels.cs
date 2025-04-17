@@ -1,4 +1,4 @@
-namespace PathRAG.Api.Models;
+namespace PathRAG.Core.Models;
 
 public class VectorStoreDto
 {
@@ -21,6 +21,9 @@ public class DocumentDto
     public string Type { get; set; } = string.Empty;
     public Guid VectorStoreId { get; set; }
     public DateTime UploadedAt { get; set; }
+    public int ChunkCount { get; set; }
+    public int EntityCount { get; set; }
+    public int RelationshipCount { get; set; }
 }
 
 public class GraphEntityDto

@@ -1,4 +1,4 @@
-namespace PathRAG.Api.Models;
+namespace PathRAG.Core.Models;
 
 public class UserDto
 {

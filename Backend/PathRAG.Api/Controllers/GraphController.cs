@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using PathRAG.Core.Models;
 using PathRAG.Core.Services.Graph;
+using PathRAG.Infrastructure.Models;
 using System.Threading;
 using System.Threading.Tasks;
 

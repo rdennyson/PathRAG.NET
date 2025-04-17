@@ -9,6 +9,8 @@ using PathRAG.Infrastructure.Data;
 using System.Text;
 using Npgsql;
 using Microsoft.Extensions.Configuration;
+using Pgvector.EntityFrameworkCore;
+using PathRAG.Infrastructure.Models;
 
 namespace PathRAG.Core.Services.Query;
 
@@ -48,7 +50,7 @@ public class HybridQueryService : IHybridQueryService
     {
         // Semantic search using embeddings with pgvector
         var semanticChunks = await PerformVectorSearchAsync(
-            "TextChunks",
+            "textchunks",
             queryEmbedding,
             _options.TopK / 2,
             cancellationToken);
@@ -57,7 +59,7 @@ public class HybridQueryService : IHybridQueryService
         if (semanticChunks.Count == 0)
         {
             semanticChunks = await _dbContext.TextChunks
-                .OrderByDescending(c => CosineSimilarity(c.Embedding, queryEmbedding))
+                .OrderByDescending(c => c.Embedding.CosineDistance(queryEmbedding))
                 .Take(_options.TopK / 2)
                 .ToListAsync(cancellationToken);
         }
@@ -143,8 +145,8 @@ public class HybridQueryService : IHybridQueryService
 
                 // Get embedding as array
                 var embeddingBytes = (byte[])reader[reader.GetOrdinal("Embedding")];
-                chunk.Embedding = new float[embeddingBytes.Length / sizeof(float)];
-                Buffer.BlockCopy(embeddingBytes, 0, chunk.Embedding, 0, embeddingBytes.Length);
+                chunk.Embedding = new Pgvector.Vector(new float[embeddingBytes.Length / sizeof(float)]);
+                Buffer.BlockCopy(embeddingBytes, 0, chunk.Embedding.ToArray(), 0, embeddingBytes.Length);
 
                 results.Add(chunk);
             }
@@ -188,7 +190,9 @@ public class HybridQueryService : IHybridQueryService
         float[] queryEmbedding,
         List<Guid> vectorStoreIds,
         int topK,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? highLevelKeywords = null,
+        IReadOnlyList<string>? lowLevelKeywords = null)
     {
         try
         {
@@ -199,12 +203,35 @@ public class HybridQueryService : IHybridQueryService
                 cancellationToken,
                 vectorStoreIds);
 
-            // Perform keyword search
-            var keywordResults = await _dbContext.TextChunks
-                .Where(c => vectorStoreIds.Contains(c.VectorStoreId))
-                .Where(c => EF.Functions.ILike(c.Content, $"%{query}%"))
-                .Take(topK)
-                .ToListAsync(cancellationToken);
+            // Perform keyword search using low-level keywords if available
+            var keywordResults = new List<TextChunk>();
+
+            if (lowLevelKeywords != null && lowLevelKeywords.Count > 0)
+            {
+                // Use extracted low-level keywords for more precise search
+                foreach (var keyword in lowLevelKeywords)
+                {
+                    var keywordMatches = await _dbContext.TextChunks
+                        .Where(c => vectorStoreIds.Contains(c.VectorStoreId))
+                        .Where(c => EF.Functions.ILike(c.Content, $"%{keyword}%"))
+                        .Take(topK / 2) // Limit results per keyword
+                        .ToListAsync(cancellationToken);
+
+                    keywordResults.AddRange(keywordMatches);
+                }
+
+                // Deduplicate results
+                keywordResults = keywordResults.DistinctBy(c => c.Id).ToList();
+            }
+            else
+            {
+                // Fall back to using the original query
+                keywordResults = await _dbContext.TextChunks
+                    .Where(c => vectorStoreIds.Contains(c.VectorStoreId))
+                    .Where(c => EF.Functions.ILike(c.Content, $"%{query}%"))
+                    .Take(topK)
+                    .ToListAsync(cancellationToken);
+            }
 
             // Combine results, prioritizing exact matches
             var combinedResults = new List<TextChunk>();
@@ -233,7 +260,9 @@ public class HybridQueryService : IHybridQueryService
         float[] queryEmbedding,
         List<Guid> vectorStoreIds,
         int topK,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? highLevelKeywords = null,
+        IReadOnlyList<string>? lowLevelKeywords = null)
     {
         try
         {
@@ -243,7 +272,9 @@ public class HybridQueryService : IHybridQueryService
                 queryEmbedding,
                 vectorStoreIds,
                 topK,
-                cancellationToken);
+                cancellationToken,
+                highLevelKeywords,
+                lowLevelKeywords);
 
             // Get relevant entities
             var entities = await _vectorSearchService.SearchEntitiesAsync(
@@ -255,13 +286,37 @@ public class HybridQueryService : IHybridQueryService
             // Vector store filtering is now done in the search service
             entities = entities.ToList();
 
-            // Also search for entities by name
-            var keywordEntities = await _dbContext.Entities
-                .Where(e => vectorStoreIds.Contains(e.VectorStoreId))
-                .Where(e => EF.Functions.ILike(e.Name, $"%{query}%") ||
-                           EF.Functions.ILike(e.Description, $"%{query}%"))
-                .Take(topK)
-                .ToListAsync(cancellationToken);
+            // Also search for entities by name using high-level keywords if available
+            var keywordEntities = new List<GraphEntity>();
+
+            if (highLevelKeywords != null && highLevelKeywords.Count > 0)
+            {
+                // Use extracted high-level keywords for more precise entity search
+                foreach (var keyword in highLevelKeywords)
+                {
+                    var keywordMatches = await _dbContext.Entities
+                        .Where(e => vectorStoreIds.Contains(e.VectorStoreId))
+                        .Where(e => EF.Functions.ILike(e.Name, $"%{keyword}%") ||
+                                   EF.Functions.ILike(e.Description, $"%{keyword}%"))
+                        .Take(topK / 2) // Limit results per keyword
+                        .ToListAsync(cancellationToken);
+
+                    keywordEntities.AddRange(keywordMatches);
+                }
+
+                // Deduplicate results
+                keywordEntities = keywordEntities.DistinctBy(e => e.Id).ToList();
+            }
+            else
+            {
+                // Fall back to using the original query
+                keywordEntities = await _dbContext.Entities
+                    .Where(e => vectorStoreIds.Contains(e.VectorStoreId))
+                    .Where(e => EF.Functions.ILike(e.Name, $"%{query}%") ||
+                               EF.Functions.ILike(e.Description, $"%{query}%"))
+                    .Take(topK)
+                    .ToListAsync(cancellationToken);
+            }
 
             // Combine entity results
             foreach (var entity in keywordEntities)

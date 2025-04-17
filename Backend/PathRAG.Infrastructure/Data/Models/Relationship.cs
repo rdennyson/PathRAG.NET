@@ -1,8 +1,9 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using Pgvector;
 
-namespace PathRAG.Core.Models;
-
+namespace PathRAG.Infrastructure.Models;
+[Table("relationship", Schema = "public")]
 public class Relationship
 {
     [Key]
@@ -20,7 +21,8 @@ public class Relationship
 
     public string Description { get; set; } = string.Empty;
 
-    public float[] Embedding { get; set; } = Array.Empty<float>();
+    [Column(TypeName = "vector")]
+    public Vector Embedding { get; set; } = new Vector(Array.Empty<float>());
 
     public float Weight { get; set; }
 

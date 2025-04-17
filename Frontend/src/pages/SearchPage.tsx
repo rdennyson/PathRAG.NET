@@ -123,9 +123,6 @@ const SearchPage: React.FC = () => {
     }
   };
 
-  // Track the last message ID that was saved to prevent duplicate saves
-  const lastSavedMessageIdRef = React.useRef<string | null>(null);
-
   const handleUpdateSession = async (updatedSession: ChatSession) => {
     // Update local state
     setLocalChatSession(updatedSession);
@@ -142,36 +139,8 @@ const SearchPage: React.FC = () => {
       )
     );
 
-    // Save the latest message to the backend
-    if (updatedSession.messages && updatedSession.messages.length > 0) {
-      try {
-        const latestMessage = updatedSession.messages[updatedSession.messages.length - 1];
-
-        // Skip if there's no message or no ID
-        if (!latestMessage || !latestMessage.id) {
-          return;
-        }
-
-        // Only save if it's a new message (doesn't have a server-generated ID)
-        // and we haven't already saved this message
-        if (latestMessage.id.includes('-') && latestMessage.id !== lastSavedMessageIdRef.current) {
-          console.log(`Saving new message: ${latestMessage.id}`);
-          lastSavedMessageIdRef.current = latestMessage.id;
-
-          await apiService.addChatMessage(
-            updatedSession.id,
-            latestMessage.content,
-            latestMessage.role,
-            []
-          );
-        } else {
-          console.log(`Skipping message save (already saved or has server ID): ${latestMessage.id}`);
-        }
-      } catch (error) {
-        console.error('Failed to save chat message:', error);
-        // Don't show error to user as it's not critical
-      }
-    }
+    // Note: We've moved the message saving logic to ChatWindow.tsx
+    // to ensure messages are properly saved in the correct order
   };
 
   return (

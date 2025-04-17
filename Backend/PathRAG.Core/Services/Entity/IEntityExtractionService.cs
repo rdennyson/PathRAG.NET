@@ -1,6 +1,7 @@
 using System.Threading;
 using System.Threading.Tasks;
 using PathRAG.Core.Models;
+using PathRAG.Infrastructure.Models;
 
 namespace PathRAG.Core.Services.Entity;
 

@@ -63,9 +63,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ chatSession, onUpdateSession })
       return;
     }
 
-    // Create user message
+    // Create user message with a temporary ID (will be replaced with server ID)
     const userMessage: ChatMessageType = {
-      id: Date.now().toString(),
+      id: `temp-${Date.now()}`,
       content,
       role: 'user',
       timestamp: new Date().toISOString(),
@@ -88,12 +88,26 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ chatSession, onUpdateSession })
     setAbortController(controller);
 
     try {
-      // Upload attachments if any
-      if (attachments.length > 0) {
-        // This would be implemented with a file upload API
-        // For now, we'll just simulate it
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+      // Save user message to the backend first
+      console.log('Saving user message to backend...');
+      const savedMessage = await apiService.addChatMessage(
+        chatSession.id,
+        content,
+        'user',
+        attachments
+      );
+
+      console.log('User message saved:', savedMessage);
+
+      // Replace temporary message ID with server-generated ID
+      const messagesWithSavedUserMessage = updatedSession.messages.map(msg =>
+        msg.id === userMessage.id ? { ...msg, id: savedMessage.id } : msg
+      );
+
+      const sessionWithSavedUserMessage = {
+        ...updatedSession,
+        messages: messagesWithSavedUserMessage
+      };
 
       // Create query request
       const queryRequest: QueryRequest = {
@@ -105,7 +119,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ chatSession, onUpdateSession })
 
       // Create a placeholder assistant message for streaming
       const assistantMessage: ChatMessageType = {
-        id: Date.now().toString(),
+        id: `temp-assistant-${Date.now()}`,
         content: '',
         role: 'assistant',
         timestamp: new Date().toISOString()
@@ -113,8 +127,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ chatSession, onUpdateSession })
 
       // Add the empty assistant message to the session
       const sessionWithAssistantMessage = {
-        ...updatedSession,
-        messages: [...(updatedSession.messages || []), assistantMessage],
+        ...sessionWithSavedUserMessage,
+        messages: [...(sessionWithSavedUserMessage.messages || []), assistantMessage],
         updatedAt: new Date().toISOString()
       };
       onUpdateSession(sessionWithAssistantMessage);
@@ -153,6 +167,29 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ chatSession, onUpdateSession })
             },
             controller.signal
           );
+
+          // After streaming is complete, save the assistant message to the backend
+          console.log('Saving assistant response to backend...');
+          const savedAssistantMessage = await apiService.addChatMessage(
+            chatSession.id,
+            streamedContent,
+            'assistant',
+            []
+          );
+          console.log('Assistant message saved:', savedAssistantMessage);
+
+          // Replace temporary message ID with server-generated ID
+          const finalMessages = sessionWithAssistantMessage.messages.map(msg =>
+            msg.id === assistantMessage.id ? { ...msg, id: savedAssistantMessage.id, content: streamedContent } : msg
+          );
+
+          // Update the session with the saved assistant message
+          const finalStreamedSession = {
+            ...sessionWithAssistantMessage,
+            messages: finalMessages,
+            updatedAt: new Date().toISOString()
+          };
+          onUpdateSession(finalStreamedSession);
         } catch (streamError) {
           if (streamError instanceof DOMException && streamError.name === 'AbortError') {
             // Request was aborted, do nothing
@@ -194,9 +231,32 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ chatSession, onUpdateSession })
           }
 
           // Update the session
-          const finalSession = {
+          const sessionWithResponse = {
             ...sessionWithAssistantMessage,
             messages: updatedMessages,
+            updatedAt: new Date().toISOString()
+          };
+          onUpdateSession(sessionWithResponse);
+
+          // Save the assistant message to the backend
+          console.log('Saving assistant response to backend...');
+          const savedAssistantMessage = await apiService.addChatMessage(
+            chatSession.id,
+            response.answer,
+            'assistant',
+            []
+          );
+          console.log('Assistant message saved:', savedAssistantMessage);
+
+          // Replace temporary message ID with server-generated ID
+          const finalMessages = sessionWithResponse.messages.map(msg =>
+            msg.id === assistantMessage.id ? { ...msg, id: savedAssistantMessage.id } : msg
+          );
+
+          // Update the session with the saved assistant message
+          const finalSession = {
+            ...sessionWithResponse,
+            messages: finalMessages,
             updatedAt: new Date().toISOString()
           };
           onUpdateSession(finalSession);

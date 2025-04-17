@@ -53,7 +53,7 @@ export interface ApiService {
 
 // Create axios instance with base URL from environment variables
 const apiClient: AxiosInstance = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api',
+  baseURL: `${import.meta.env.VITE_API_BASE_URL}/api` || 'http://localhost:3000/api',
   headers: {
     'Content-Type': 'application/json',
   },

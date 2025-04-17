@@ -1,8 +1,8 @@
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using PathRAG.Api.Models;
 using PathRAG.Core.Commands;
+
 using PathRAG.Core.Models;
 using PathRAG.Core.Queries;
 using System.Security.Claims;
@@ -134,17 +134,15 @@ public class VectorStoresController : ControllerBase
         {
             var chunks = await _mediator.Send(command);
 
-            var documentDto = new DocumentDto
+            // Get the document details
+            var query = new GetDocumentByIdQuery
             {
                 Id = Guid.Parse(chunks[0].FullDocumentId),
-                Name = file.FileName,
-                Size = file.Length,
-                Type = file.ContentType,
-                VectorStoreId = id,
-                UploadedAt = DateTime.UtcNow
+                UserId = userId
             };
 
-            return Ok(documentDto);
+            var document = await _mediator.Send(query);
+            return Ok(document);
         }
         catch (KeyNotFoundException)
         {
@@ -152,8 +150,91 @@ public class VectorStoresController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error uploading document");
+            _logger.LogError(ex, "Error uploading document: {Message}", ex.Message);
             return StatusCode(500, "Error processing document");
+        }
+    }
+
+    [HttpGet("{id}/documents")]
+    public async Task<ActionResult<IEnumerable<DocumentDto>>> GetDocuments(Guid id)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        try
+        {
+            var query = new GetDocumentsByVectorStoreIdQuery
+            {
+                VectorStoreId = id,
+                UserId = userId
+            };
+
+            var documents = await _mediator.Send(query);
+            return Ok(documents);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound("Vector store not found");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving documents: {Message}", ex.Message);
+            return StatusCode(500, "Error retrieving documents");
+        }
+    }
+
+    [HttpGet("{vectorStoreId}/documents/{id}")]
+    public async Task<ActionResult<DocumentDto>> GetDocument(Guid vectorStoreId, Guid id)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        try
+        {
+            var query = new GetDocumentByIdQuery
+            {
+                Id = id,
+                UserId = userId
+            };
+
+            var document = await _mediator.Send(query);
+            if (document == null)
+            {
+                return NotFound("Document not found");
+            }
+
+            return Ok(document);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving document: {Message}", ex.Message);
+            return StatusCode(500, "Error retrieving document");
+        }
+    }
+
+    [HttpDelete("{vectorStoreId}/documents/{id}")]
+    public async Task<ActionResult> DeleteDocument(Guid vectorStoreId, Guid id)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        try
+        {
+            var command = new DeleteDocumentCommand
+            {
+                Id = id,
+                UserId = userId
+            };
+
+            var result = await _mediator.Send(command);
+            if (!result)
+            {
+                return NotFound("Document not found");
+            }
+
+            return NoContent();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting document: {Message}", ex.Message);
+            return StatusCode(500, "Error deleting document");
         }
     }
 

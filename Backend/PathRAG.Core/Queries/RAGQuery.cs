@@ -3,22 +3,52 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using PathRAG.Core.Commands;
 using PathRAG.Core.Models;
+using PathRAG.Core.Services.Cache;
 using PathRAG.Core.Services.Embedding;
 using PathRAG.Core.Services.Query;
 using PathRAG.Infrastructure.Data;
+using PathRAG.Infrastructure.Models;
 using SharpToken;
 using System.Text;
 
-namespace PathRAG.Core.Handlers;
+namespace PathRAG.Core.Queries;
 
-public class QueryHandler : IRequestHandler<QueryCommand, QueryResult>
+public enum SearchMode
+{
+    Semantic,
+    Hybrid,
+    Graph
+}
+
+public class RAGQuery : IRequest<QueryResult>
+{
+    public string Query { get; set; } = string.Empty;
+    public List<Guid> VectorStoreIds { get; set; } = new List<Guid>();
+    public SearchMode SearchMode { get; set; } = SearchMode.Hybrid;
+    public Guid AssistantId { get; set; }
+    public string UserId { get; set; } = string.Empty;
+}
+
+public class QueryResult
+{
+    public string Answer { get; set; } = string.Empty;
+    public List<string> Sources { get; set; } = new List<string>();
+    public List<GraphEntity>? Entities { get; set; }
+    public List<Relationship>? Relationships { get; set; }
+    public List<string>? HighLevelKeywords { get; set; }
+    public List<string>? LowLevelKeywords { get; set; }
+    public bool IsCached { get; set; } = false;
+}
+
+public class QueryHandler : IRequestHandler<RAGQuery, QueryResult>
 {
     private readonly PathRagDbContext _dbContext;
     private readonly IEmbeddingService _embeddingService;
     private readonly IHybridQueryService _hybridQueryService;
     private readonly IContextBuilderService _contextBuilderService;
+    private readonly IKeywordExtractionService _keywordExtractionService;
+    private readonly ILLMResponseCacheService _cacheService;
     private readonly OpenAIClient _openAIClient;
     private readonly PathRagOptions _options;
     private readonly ILogger<QueryHandler> _logger;
@@ -29,6 +59,8 @@ public class QueryHandler : IRequestHandler<QueryCommand, QueryResult>
         IEmbeddingService embeddingService,
         IHybridQueryService hybridQueryService,
         IContextBuilderService contextBuilderService,
+        IKeywordExtractionService keywordExtractionService,
+        ILLMResponseCacheService cacheService,
         OpenAIClient openAIClient,
         IOptions<PathRagOptions> options,
         ILogger<QueryHandler> logger)
@@ -37,6 +69,8 @@ public class QueryHandler : IRequestHandler<QueryCommand, QueryResult>
         _embeddingService = embeddingService;
         _hybridQueryService = hybridQueryService;
         _contextBuilderService = contextBuilderService;
+        _keywordExtractionService = keywordExtractionService;
+        _cacheService = cacheService;
         _openAIClient = openAIClient;
         _options = options.Value;
         _logger = logger;
@@ -56,8 +90,21 @@ public class QueryHandler : IRequestHandler<QueryCommand, QueryResult>
         };
     }
 
-    public async Task<QueryResult> Handle(QueryCommand request, CancellationToken cancellationToken)
+    public async Task<QueryResult> Handle(RAGQuery request, CancellationToken cancellationToken)
     {
+        // 1. Check cache first
+        var cachedResponse = await _cacheService.GetResponseAsync(request.Query, cancellationToken);
+        if (cachedResponse != null)
+        {
+            _logger.LogInformation("Cache hit for query: {Query}", request.Query);
+            return new QueryResult
+            {
+                Answer = cachedResponse,
+                Sources = new List<string>(),
+                IsCached = true
+            };
+        }
+
         // Verify assistant exists and belongs to user
         var assistant = await _dbContext.Assistants
             .Include(a => a.AssistantVectorStores)
@@ -78,10 +125,19 @@ public class QueryHandler : IRequestHandler<QueryCommand, QueryResult>
             throw new InvalidOperationException("No vector stores specified for search");
         }
 
-        // Get query embedding
+        // 2. Extract keywords from query
+        var keywordResult = await _keywordExtractionService.ExtractKeywordsAsync(request.Query, cancellationToken);
+        var highLevelKeywords = keywordResult.HighLevelKeywords.ToList();
+        var lowLevelKeywords = keywordResult.LowLevelKeywords.ToList();
+
+        _logger.LogInformation("Extracted keywords - High-level: {HighLevel}, Low-level: {LowLevel}",
+            string.Join(", ", highLevelKeywords),
+            string.Join(", ", lowLevelKeywords));
+
+        // 3. Get query embedding
         var queryEmbedding = await _embeddingService.GetEmbeddingAsync(request.Query, cancellationToken);
 
-        // Perform search based on mode
+        // 4. Perform search based on mode
         List<TextChunk> relevantChunks = new();
         List<GraphEntity> relevantEntities = new();
         List<Relationship> relevantRelationships = new();
@@ -99,12 +155,15 @@ public class QueryHandler : IRequestHandler<QueryCommand, QueryResult>
 
             case SearchMode.Hybrid:
                 // Hybrid search - vector + keyword
+                // Use the extracted keywords for better search results
                 relevantChunks = await _hybridQueryService.HybridSearchAsync(
                     request.Query,
                     queryEmbedding,
                     vectorStoreIds,
                     _options.TopK,
-                    cancellationToken);
+                    cancellationToken,
+                    highLevelKeywords,
+                    lowLevelKeywords);
                 break;
 
             case SearchMode.Graph:
@@ -114,7 +173,9 @@ public class QueryHandler : IRequestHandler<QueryCommand, QueryResult>
                     queryEmbedding,
                     vectorStoreIds,
                     _options.TopK,
-                    cancellationToken);
+                    cancellationToken,
+                    highLevelKeywords,
+                    lowLevelKeywords);
                 break;
         }
 
@@ -189,6 +250,10 @@ public class QueryHandler : IRequestHandler<QueryCommand, QueryResult>
 
             _logger.LogInformation("Successfully generated response with {TokenCount} tokens",
                 totalTokens + _encoding.Encode(answer).Count);
+
+            // Cache the response
+            await _cacheService.CacheResponseAsync(request.Query, answer, cancellationToken);
+            _logger.LogInformation("Cached response for query: {Query}", request.Query);
         }
         catch (Exception ex)
         {
@@ -202,7 +267,10 @@ public class QueryHandler : IRequestHandler<QueryCommand, QueryResult>
             Answer = answer,
             Sources = relevantChunks.Select(c => c.Content).ToList(),
             Entities = relevantEntities.Count > 0 ? relevantEntities : null,
-            Relationships = relevantRelationships.Count > 0 ? relevantRelationships : null
+            Relationships = relevantRelationships.Count > 0 ? relevantRelationships : null,
+            HighLevelKeywords = highLevelKeywords,
+            LowLevelKeywords = lowLevelKeywords,
+            IsCached = false
         };
 
         return result;

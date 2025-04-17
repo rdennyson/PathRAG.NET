@@ -1,7 +1,6 @@
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using PathRAG.Api.Models;
 using PathRAG.Core.Commands;
 using PathRAG.Core.Models;
 using PathRAG.Core.Queries;

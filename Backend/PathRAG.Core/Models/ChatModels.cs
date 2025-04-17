@@ -1,4 +1,6 @@
-namespace PathRAG.Api.Models;
+using Microsoft.AspNetCore.Http;
+
+namespace PathRAG.Core.Models;
 
 public class ChatSessionDto
 {

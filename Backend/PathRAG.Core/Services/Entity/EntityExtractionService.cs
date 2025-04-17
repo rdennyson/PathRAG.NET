@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PathRAG.Core.Models;
 using PathRAG.Core.Services.Embedding;
+using PathRAG.Infrastructure.Models;
 using SharpToken;
 using System.Text.Json;
 using System.Text.RegularExpressions;

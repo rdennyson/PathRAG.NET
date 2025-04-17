@@ -1,4 +1,5 @@
 using PathRAG.Core.Models;
+using PathRAG.Infrastructure.Models;
 
 namespace PathRAG.Core.Services.Entity;
 
@@ -14,7 +15,7 @@ public interface IRelationshipService
         int maxDepth = 2,
         CancellationToken cancellationToken = default);
         
-    Task<float> CalculateRelationshipStrengthAsync(
+    Task<double> CalculateRelationshipStrengthAsync(
         string sourceEntityId,
         string targetEntityId,
         CancellationToken cancellationToken = default);

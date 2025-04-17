@@ -1,4 +1,5 @@
 using PathRAG.Core.Models;
+using PathRAG.Infrastructure.Models;
 
 namespace PathRAG.Core.Services.Query;
 
@@ -28,12 +29,16 @@ public interface IHybridQueryService
         float[] queryEmbedding,
         List<Guid> vectorStoreIds,
         int topK,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? highLevelKeywords = null,
+        IReadOnlyList<string>? lowLevelKeywords = null);
 
     Task<(List<TextChunk> chunks, List<GraphEntity> entities, List<Relationship> relationships)> GraphSearchAsync(
         string query,
         float[] queryEmbedding,
         List<Guid> vectorStoreIds,
         int topK,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? highLevelKeywords = null,
+        IReadOnlyList<string>? lowLevelKeywords = null);
 }

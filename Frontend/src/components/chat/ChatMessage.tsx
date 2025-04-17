@@ -12,16 +12,16 @@ interface ChatMessageProps {
 
 const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
   const isUser = message.role === 'user';
-  
+
   return (
     <div className="flex flex-row gap-4 mb-4">
       <Avatar circle size="sm">
         {isUser ? <FaUser /> : <FaRobot />}
       </Avatar>
-      
+
       <Panel
         bordered
-        className={`${isUser ? 'bg-blue-50 dark:bg-blue-900' : 'bg-purple-50 dark:bg-purple-900'} p-3 rounded-lg`}
+        className={`${isUser ? 'bg-green-50 dark:bg-green-800' : 'bg-emerald-50 dark:bg-emerald-900'} p-3 rounded-lg`}
         style={{ maxWidth: '80%' }}
       >
         <ReactMarkdown
@@ -49,7 +49,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
         >
           {message.content}
         </ReactMarkdown>
-        
+
         <div className="text-xs text-gray-500 mt-2">
           {new Date(message.timestamp).toLocaleTimeString()}
         </div>

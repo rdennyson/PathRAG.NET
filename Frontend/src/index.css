@@ -231,6 +231,14 @@ body {
   background-color: #f5f3ff;
 }
 
+.bg-green-50 {
+  background-color: #f0fdf4;
+}
+
+.bg-emerald-50 {
+  background-color: #ecfdf5;
+}
+
 .border-t {
   border-top-width: 1px;
 }
@@ -296,6 +304,14 @@ body {
 
 .dark\:bg-purple-900 {
   background-color: #581c87;
+}
+
+.dark\:bg-green-800 {
+  background-color: #166534;
+}
+
+.dark\:bg-emerald-900 {
+  background-color: #064e3b;
 }
 
 .dark\:text-gray-300 {

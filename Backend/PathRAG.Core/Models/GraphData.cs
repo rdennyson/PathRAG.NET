@@ -1,3 +1,4 @@
+using PathRAG.Infrastructure.Models;
 using System.Text.Json.Serialization;
 
 namespace PathRAG.Core.Models;

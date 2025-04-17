@@ -18,8 +18,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PathRAG.Tests", "Backend\Pa
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Frontend", "Frontend", "{C9D302A5-E48F-437D-9DFF-B7DC4A993095}"
 EndProject
-Project("{54A90642-561A-4BB1-A94E-469ADEE60C69}") = "pathrag.react", "Frontend\pathrag.react.esproj", "{6E9BEBC7-030C-41B7-BBB8-0292A2A45981}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -42,12 +40,6 @@ Global
 		{15820B8B-E724-47FB-A3FA-0A69F917D6CE}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{15820B8B-E724-47FB-A3FA-0A69F917D6CE}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{15820B8B-E724-47FB-A3FA-0A69F917D6CE}.Release|Any CPU.Build.0 = Release|Any CPU
-		{6E9BEBC7-030C-41B7-BBB8-0292A2A45981}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{6E9BEBC7-030C-41B7-BBB8-0292A2A45981}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{6E9BEBC7-030C-41B7-BBB8-0292A2A45981}.Debug|Any CPU.Deploy.0 = Debug|Any CPU
-		{6E9BEBC7-030C-41B7-BBB8-0292A2A45981}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{6E9BEBC7-030C-41B7-BBB8-0292A2A45981}.Release|Any CPU.Build.0 = Release|Any CPU
-		{6E9BEBC7-030C-41B7-BBB8-0292A2A45981}.Release|Any CPU.Deploy.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -57,7 +49,6 @@ Global
 		{A2E8F7D3-8B5E-4B4F-9E8D-9C2E6B6D7E1B} = {D8F9A015-76B3-4E51-8C5B-6D6E8F442D15}
 		{B3E7F7D3-8B5E-4B4F-9E8D-9C2E6B6D7E1C} = {D8F9A015-76B3-4E51-8C5B-6D6E8F442D15}
 		{15820B8B-E724-47FB-A3FA-0A69F917D6CE} = {E8F9A015-76B3-4E51-8C5B-6D6E8F442D16}
-		{6E9BEBC7-030C-41B7-BBB8-0292A2A45981} = {C9D302A5-E48F-437D-9DFF-B7DC4A993095}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		        SolutionGuid = {F6F9A015-76B3-4E51-8C5B-6D6E8F442D18}

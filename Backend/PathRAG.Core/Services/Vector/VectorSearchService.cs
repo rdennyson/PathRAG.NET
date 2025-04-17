@@ -5,6 +5,9 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using PathRAG.Core.Models;
 using PathRAG.Infrastructure.Data;
+using PathRAG.Infrastructure.Models;
+using Pgvector;
+using Pgvector.EntityFrameworkCore;
 using System.Text;
 
 namespace PathRAG.Core.Services.Vector;
@@ -35,7 +38,7 @@ public class VectorSearchService : IVectorSearchService
         List<Guid>? vectorStoreIds = null)
     {
         return await PerformVectorSearchAsync<TextChunk>(
-            "TextChunks",
+            "textchunks",
             queryEmbedding,
             topK,
             cancellationToken,
@@ -49,7 +52,7 @@ public class VectorSearchService : IVectorSearchService
         List<Guid>? vectorStoreIds = null)
     {
         return await PerformVectorSearchAsync<GraphEntity>(
-            "Entities",
+            "entities",
             queryEmbedding,
             topK,
             cancellationToken,
@@ -63,7 +66,7 @@ public class VectorSearchService : IVectorSearchService
         List<Guid>? vectorStoreIds = null)
     {
         return await PerformVectorSearchAsync<Relationship>(
-            "Relationships",
+            "relationships",
             queryEmbedding,
             topK,
             cancellationToken,
@@ -84,25 +87,25 @@ public class VectorSearchService : IVectorSearchService
             await using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync(cancellationToken);
 
-            // Convert embedding to string format for PostgreSQL
-            var embeddingStr = new StringBuilder("[");
-            for (int i = 0; i < queryEmbedding.Length; i++)
-            {
-                embeddingStr.Append(queryEmbedding[i].ToString("G"));
-                if (i < queryEmbedding.Length - 1)
-                    embeddingStr.Append(',');
-            }
-            embeddingStr.Append("]");
+            // Create a Vector from the query embedding
+            var queryVector = new Pgvector.Vector(queryEmbedding);
+
+            // Convert to parameter format
+            var embeddingStr = queryVector.ToString();
 
             // Use pgvector's cosine distance operator <=> for similarity search
             string whereClause = "";
             if (vectorStoreIds != null && vectorStoreIds.Count > 0 && (typeof(T) == typeof(TextChunk) || typeof(T) == typeof(GraphEntity) || typeof(T) == typeof(Relationship)))
             {
                 string ids = string.Join(",", vectorStoreIds.Select(id => $"'{id}'"));
-                whereClause = $" WHERE \"VectorStoreId\" IN ({ids})";
+                whereClause = $" WHERE \"vectorstoreid\" IN ({ids})";
             }
 
+            // Use cosine similarity with vector type
+            // Note: The <=> operator is provided by the pgvector extension
             var sql = $@"SELECT * FROM ""{tableName}""{whereClause} ORDER BY embedding <=> '{embeddingStr}'::vector LIMIT {topK}";
+
+            _logger.LogDebug("Executing vector search query: {Sql}", sql);
 
             await using var cmd = new NpgsqlCommand(sql, connection);
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
@@ -123,10 +126,51 @@ public class VectorSearchService : IVectorSearchService
                             if (property.Name == "Embedding")
                             {
                                 // Handle embedding specially
-                                var embeddingBytes = (byte[])reader[ordinal];
-                                var embedding = new float[embeddingBytes.Length / sizeof(float)];
-                                Buffer.BlockCopy(embeddingBytes, 0, embedding, 0, embeddingBytes.Length);
-                                property.SetValue(item, embedding);
+                                if (reader[ordinal] is Pgvector.Vector vector)
+                                {
+                                    // Handle Vector type directly
+                                    property.SetValue(item, vector);
+                                }
+                                else if (reader[ordinal] is byte[] embeddingBytes)
+                                {
+                                    try
+                                    {
+                                        // Convert byte array to float array
+                                        var embeddingString = System.Text.Encoding.UTF8.GetString(embeddingBytes);
+                                        var floatArray = ParseVectorString(embeddingString);
+                                        property.SetValue(item, new Pgvector.Vector(floatArray));
+                                    }
+                                    catch
+                                    {
+                                        // Fallback to float array
+                                        var embedding = new float[embeddingBytes.Length / sizeof(float)];
+                                        Buffer.BlockCopy(embeddingBytes, 0, embedding, 0, embeddingBytes.Length);
+                                        property.SetValue(item, new Pgvector.Vector(embedding));
+                                    }
+                                }
+                                else if (reader[ordinal] is float[] floatArray)
+                                {
+                                    // Handle float array format
+                                    property.SetValue(item, new Pgvector.Vector(floatArray));
+                                }
+                                else
+                                {
+                                    // Try to parse as string
+                                    try
+                                    {
+                                        var embeddingString = reader[ordinal].ToString();
+                                        if (!string.IsNullOrEmpty(embeddingString))
+                                        {
+                                            // Parse the string to float array
+                                            floatArray = ParseVectorString(embeddingString);
+                                            property.SetValue(item, new Pgvector.Vector(floatArray));
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogWarning(ex, "Error parsing embedding from database");
+                                    }
+                                }
                             }
                             else if (property.PropertyType == typeof(Guid))
                             {
@@ -171,7 +215,13 @@ public class VectorSearchService : IVectorSearchService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Vector search error for type {TypeName}", typeof(T).Name);
+            _logger.LogError(ex, "Vector search error for type {TypeName}: {ErrorMessage}", typeof(T).Name, ex.Message);
+
+            // Log more details about the error
+            if (ex.InnerException != null)
+            {
+                _logger.LogError("Inner exception: {InnerErrorMessage}", ex.InnerException.Message);
+            }
 
             // Fallback to EF Core with in-memory cosine similarity
             if (typeof(T) == typeof(TextChunk))
@@ -191,7 +241,7 @@ public class VectorSearchService : IVectorSearchService
 
                 // Then calculate similarity and sort in memory
                 var sortedChunks = chunks
-                    .Select(c => new { Chunk = c, Similarity = CosineSimilarity(((TextChunk)c).Embedding, queryEmbedding) })
+                    .Select(c => new { Chunk = c, Similarity = c.Embedding.CosineDistance(queryEmbedding) })
                     .OrderByDescending(x => x.Similarity)
                     .Take(topK)
                     .Select(x => x.Chunk)
@@ -215,7 +265,7 @@ public class VectorSearchService : IVectorSearchService
 
                 // Then calculate similarity and sort in memory
                 var sortedEntities = entities
-                    .Select(e => new { Entity = e, Similarity = CosineSimilarity(((GraphEntity)e).Embedding, queryEmbedding) })
+                    .Select(e => new { Entity = e, Similarity = e.Embedding.CosineDistance(queryEmbedding) })
                     .OrderByDescending(x => x.Similarity)
                     .Take(topK)
                     .Select(x => x.Entity)
@@ -239,7 +289,7 @@ public class VectorSearchService : IVectorSearchService
 
                 // Then calculate similarity and sort in memory
                 var sortedRelationships = relationships
-                    .Select(r => new { Relationship = r, Similarity = CosineSimilarity(((Relationship)r).Embedding, queryEmbedding) })
+                    .Select(r => new { Relationship = r, Similarity = r.Embedding.CosineDistance(queryEmbedding) })
                     .OrderByDescending(x => x.Similarity)
                     .Take(topK)
                     .Select(x => x.Relationship)
@@ -252,25 +302,22 @@ public class VectorSearchService : IVectorSearchService
         return results;
     }
 
-    private static float CosineSimilarity(float[] a, float[] b)
+    // Helper method to parse a vector string like "[1,2,3]" to float[]
+    private static float[] ParseVectorString(string vectorString)
     {
-        // Handle null or empty arrays
-        if (a == null || b == null || a.Length == 0 || b.Length == 0 || a.Length != b.Length)
-            return 0;
+        // Remove brackets and split by comma
+        vectorString = vectorString.Trim('[', ']');
+        var values = vectorString.Split(',');
 
-        float dotProduct = 0;
-        float normA = 0;
-        float normB = 0;
-
-        for (int i = 0; i < a.Length; i++)
+        var result = new float[values.Length];
+        for (int i = 0; i < values.Length; i++)
         {
-            dotProduct += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
+            if (float.TryParse(values[i], out float value))
+            {
+                result[i] = value;
+            }
         }
 
-        // Avoid division by zero
-        float denominator = (float)(Math.Sqrt(normA) * Math.Sqrt(normB));
-        return denominator > 0 ? dotProduct / denominator : 0;
+        return result;
     }
 }

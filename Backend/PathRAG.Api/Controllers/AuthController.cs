@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Http;
-using PathRAG.Api.Models;
+using PathRAG.Core.Models;
+using System.Security.Claims;
 using System.Text.Json;
 
 [ApiController]
@@ -8,11 +8,13 @@ public class AuthController : ControllerBase
 {
     private readonly IConfiguration _configuration;
     private readonly HttpClient _httpClient;
+    private readonly ILogger<AuthController> _logger;
 
-    public AuthController(IConfiguration configuration, IHttpClientFactory httpClientFactory)
+    public AuthController(IConfiguration configuration, IHttpClientFactory httpClientFactory, ILogger<AuthController> logger)
     {
         _configuration = configuration;
         _httpClient = httpClientFactory.CreateClient();
+        _logger = logger;
     }
 
     [HttpGet("login")]
@@ -67,46 +69,104 @@ public class AuthController : ControllerBase
             new KeyValuePair<string, string>("grant_type", "authorization_code")
         });
 
-        var response = await _httpClient.PostAsync(tokenEndpoint, tokenRequestContent);
-        var content = await response.Content.ReadAsStringAsync();
-
-        if (!response.IsSuccessStatusCode)
+        string content;
+        try
         {
-            return BadRequest(content);
+            _logger.LogInformation("Requesting token from {Endpoint}", tokenEndpoint);
+            var response = await _httpClient.PostAsync(tokenEndpoint, tokenRequestContent);
+            content = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("Token request failed with status {Status}: {Content}", response.StatusCode, content);
+                return BadRequest(content);
+            }
+
+            _logger.LogInformation("Token request successful");
+            // Log a sanitized version of the response (without actual tokens)
+            _logger.LogDebug("Token response received with length {Length}", content.Length);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Exception occurred while requesting token");
+            return StatusCode(500, "An error occurred while processing the authentication request");
         }
 
         // Clear the state from session
         HttpContext.Session.Remove("AuthState");
 
         // Parse the token response
-        var tokenResponse = JsonSerializer.Deserialize<TokenResponse>(content);
-
-        // Set the tokens in cookies
-        Response.Cookies.Append("access_token", tokenResponse.AccessToken, new CookieOptions
+        TokenResponse tokenResponse;
+        try
         {
-            HttpOnly = true,
-            Secure = true,
-            SameSite = SameSiteMode.Lax,
-            Expires = DateTimeOffset.Now.AddSeconds(tokenResponse.ExpiresIn)
-        });
-
-        Response.Cookies.Append("id_token", tokenResponse.IdToken, new CookieOptions
-        {
-            HttpOnly = true,
-            Secure = true,
-            SameSite = SameSiteMode.Lax,
-            Expires = DateTimeOffset.Now.AddSeconds(tokenResponse.ExpiresIn)
-        });
-
-        if (!string.IsNullOrEmpty(tokenResponse.RefreshToken))
-        {
-            Response.Cookies.Append("refresh_token", tokenResponse.RefreshToken, new CookieOptions
+            var options = new JsonSerializerOptions
             {
-                HttpOnly = true,
-                Secure = true,
-                SameSite = SameSiteMode.Lax,
-                Expires = DateTimeOffset.Now.AddDays(30) // Refresh tokens typically last longer
-            });
+                PropertyNameCaseInsensitive = true
+            };
+            tokenResponse = JsonSerializer.Deserialize<TokenResponse>(content, options);
+            _logger.LogInformation("Token response successfully deserialized");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to deserialize token response");
+            return StatusCode(500, "Failed to process authentication response");
+        }
+
+        try
+        {
+            // Set the tokens in cookies - check for null values to prevent exceptions
+            if (!string.IsNullOrEmpty(tokenResponse?.AccessToken))
+            {
+                _logger.LogInformation("Setting access_token cookie");
+                Response.Cookies.Append("access_token", tokenResponse.AccessToken, new CookieOptions
+                {
+                    HttpOnly = true,
+                    Secure = true,
+                    SameSite = SameSiteMode.Lax,
+                    Expires = DateTimeOffset.Now.AddSeconds(tokenResponse.ExpiresIn)
+                });
+            }
+            else
+            {
+                _logger.LogWarning("AccessToken is null or empty, not setting cookie");
+            }
+
+            if (!string.IsNullOrEmpty(tokenResponse?.IdToken))
+            {
+                _logger.LogInformation("Setting id_token cookie");
+                Response.Cookies.Append("id_token", tokenResponse.IdToken, new CookieOptions
+                {
+                    HttpOnly = true,
+                    Secure = true,
+                    SameSite = SameSiteMode.Lax,
+                    Expires = DateTimeOffset.Now.AddSeconds(tokenResponse.ExpiresIn)
+                });
+            }
+            else
+            {
+                _logger.LogWarning("IdToken is null or empty, not setting cookie");
+            }
+
+            if (!string.IsNullOrEmpty(tokenResponse?.RefreshToken))
+            {
+                _logger.LogInformation("Setting refresh_token cookie");
+                Response.Cookies.Append("refresh_token", tokenResponse.RefreshToken, new CookieOptions
+                {
+                    HttpOnly = true,
+                    Secure = true,
+                    SameSite = SameSiteMode.Lax,
+                    Expires = DateTimeOffset.Now.AddDays(30) // Refresh tokens typically last longer
+                });
+            }
+            else
+            {
+                _logger.LogWarning("RefreshToken is null or empty, not setting cookie");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error setting authentication cookies");
+            return StatusCode(500, "An error occurred while setting authentication cookies");
         }
 
         // Redirect to the search page
@@ -124,6 +184,26 @@ public class AuthController : ControllerBase
         return Ok(new { message = "Logged out successfully" });
     }
 
+    [HttpGet("api/user")]
+    public ActionResult<UserDto> GetCurrentUser()
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var name = User.FindFirstValue(ClaimTypes.Name);
+        var email = User.FindFirstValue(ClaimTypes.Email);
 
+        if (string.IsNullOrEmpty(userId))
+        {
+            return Unauthorized();
+        }
+
+        var user = new UserDto
+        {
+            Id = userId,
+            Name = name ?? "User",
+            Email = email ?? "user@example.com"
+        };
+
+        return Ok(user);
+    }
 }
 

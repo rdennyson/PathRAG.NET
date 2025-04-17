@@ -5,6 +5,8 @@ using PathRAG.Core.Services.Graph;
 using PathRAG.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Pgvector.EntityFrameworkCore;
+using PathRAG.Infrastructure.Models;
 
 namespace PathRAG.Core.Services.Entity;
 
@@ -128,7 +130,7 @@ If there is no clear relationship between the entities based on the provided tex
         return relationships;
     }
 
-    public async Task<float> CalculateRelationshipStrengthAsync(
+    public async Task<double> CalculateRelationshipStrengthAsync(
         string sourceEntityId,
         string targetEntityId,
         CancellationToken cancellationToken = default)
@@ -151,7 +153,7 @@ If there is no clear relationship between the entities based on the provided tex
         if (sourceEntity?.Embedding == null || targetEntity?.Embedding == null)
             return 0;
 
-        return CalculateCosineSimilarity(sourceEntity.Embedding, targetEntity.Embedding);
+        return sourceEntity.Embedding.CosineDistance(targetEntity.Embedding);
     }
 
     public async Task<List<Relationship>> GetRelationshipPathAsync(
@@ -278,22 +280,6 @@ If there is no clear relationship between the entities based on the provided tex
                 return null;
             }
         }
-    }
-
-    private float CalculateCosineSimilarity(float[] vector1, float[] vector2)
-    {
-        float dotProduct = 0;
-        float norm1 = 0;
-        float norm2 = 0;
-
-        for (int i = 0; i < vector1.Length; i++)
-        {
-            dotProduct += vector1[i] * vector2[i];
-            norm1 += vector1[i] * vector1[i];
-            norm2 += vector2[i] * vector2[i];
-        }
-
-        return dotProduct / (float)(Math.Sqrt(norm1) * Math.Sqrt(norm2));
     }
 
     private string ExtractRelationType(string response)

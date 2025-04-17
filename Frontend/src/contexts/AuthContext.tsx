@@ -56,7 +56,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // Login function - redirects to the login endpoint
   const login = async () => {
-    window.location.href = 'http://localhost:3000/api/auth/login';
+    window.location.href = `${import.meta.env.VITE_API_BASE_URL}/login`;
   };
 
   // Logout function

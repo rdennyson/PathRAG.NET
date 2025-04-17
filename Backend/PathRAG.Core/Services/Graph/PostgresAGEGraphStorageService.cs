@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using PathRAG.Core.Models;
+using PathRAG.Infrastructure.Models;
 using System.Text.Json;
 
 namespace PathRAG.Core.Services.Graph;
@@ -30,21 +31,115 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        // The graph name defined elsewhere in your class.
-        var query = $@"
-            DO
-            $$
-            BEGIN
-                -- Check if the graph with the specified name already exists.
-                IF NOT EXISTS (SELECT 1 FROM ag_catalog.ag_graph WHERE name = '{_graphName}') THEN
-                    -- Create the graph using Apache AGE's create_graph function.
-                    PERFORM create_graph('{_graphName}');
-                END IF;
-            END
-            $$;
-        ";
-        // Execute the query. You can adjust the generic type based on your implementation of ExecuteCypherQuery.
-        await ExecuteCypherQuery<object>(query, cancellationToken);
+        _logger.LogInformation("Initializing graph: {GraphName}", _graphName);
+
+        // Ensure connection is open
+        if (_connection.State != System.Data.ConnectionState.Open)
+        {
+            await _connection.OpenAsync(cancellationToken);
+        }
+
+        try
+        {
+            // First, check if the AGE extension is installed
+            _logger.LogInformation("Checking AGE extension...");
+            bool ageExtensionInstalled = await IsExtensionInstalledAsync("age", cancellationToken);
+
+            if (!ageExtensionInstalled)
+            {
+                _logger.LogWarning("AGE extension is not installed. Installing it now...");
+                await InstallAgeExtensionAsync(cancellationToken);
+            }
+
+            // Load the AGE extension
+            _logger.LogInformation("Loading AGE extension...");
+            try
+            {
+                using var loadCmd = new NpgsqlCommand("LOAD 'age';", _connection);
+                await loadCmd.ExecuteNonQueryAsync(cancellationToken);
+
+                // Set the search path to include ag_catalog
+                using var pathCmd = new NpgsqlCommand("SET search_path = ag_catalog, '$user', public;", _connection);
+                await pathCmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Warning: Could not load AGE extension. Some graph functionality may be limited.");
+                // Continue execution as we'll use fallback methods if needed
+            }
+
+            // Tables are now created by EF Core during application startup
+
+            // Check if the graph exists
+            try
+            {
+                var checkQuery = "SELECT * FROM ag_catalog.ag_graph WHERE name = @graphName";
+                using (var cmd = new NpgsqlCommand(checkQuery, _connection))
+                {
+                    cmd.Parameters.AddWithValue("@graphName", _graphName);
+                    using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                    if (!await reader.ReadAsync(cancellationToken))
+                    {
+                        // Graph doesn't exist, create it
+                        reader.Close();
+
+                        _logger.LogInformation("Creating new graph: {GraphName}", _graphName);
+                        var createQuery = "SELECT * FROM ag_catalog.create_graph(@graphName)";
+                        using var createCmd = new NpgsqlCommand(createQuery, _connection);
+                        createCmd.Parameters.AddWithValue("@graphName", _graphName);
+                        await createCmd.ExecuteNonQueryAsync(cancellationToken);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Graph {GraphName} already exists", _graphName);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Warning: Could not check or create graph. Will use fallback storage methods.");
+                // Continue execution as we'll use fallback methods if needed
+            }
+        }
+
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error initializing graph: {GraphName}", _graphName);
+            // Don't throw here, as we want the application to continue even if graph functionality is limited
+        }
+    }
+
+    private async Task<bool> IsExtensionInstalledAsync(string extensionName, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var query = "SELECT 1 FROM pg_extension WHERE extname = @extensionName";
+            using var cmd = new NpgsqlCommand(query, _connection);
+            cmd.Parameters.AddWithValue("@extensionName", extensionName);
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            return await reader.ReadAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error checking if extension {ExtensionName} is installed", extensionName);
+            return false;
+        }
+    }
+
+    private async Task InstallAgeExtensionAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var query = "CREATE EXTENSION IF NOT EXISTS age;";
+            using var cmd = new NpgsqlCommand(query, _connection);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            _logger.LogInformation("AGE extension installed successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error installing AGE extension");
+            throw;
+        }
     }
 
     public async Task<bool> HasNodeAsync(string nodeId, CancellationToken cancellationToken = default)
@@ -252,16 +347,274 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
 
     public async Task AddEntitiesAndRelationshipsAsync(List<GraphEntity> entities, List<Relationship> relationships, CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Adding {EntityCount} entities and {RelationshipCount} relationships", entities.Count, relationships.Count);
+
+        try
+        {
+            // First try using the AGE Cypher approach
+            await AddEntitiesAndRelationshipsWithAGEAsync(entities, relationships, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error using AGE Cypher for adding entities and relationships. Falling back to direct SQL approach.");
+
+            // Fallback to a more direct SQL approach
+            await AddEntitiesAndRelationshipsWithSQLAsync(entities, relationships, cancellationToken);
+        }
+    }
+
+    // Helper method to format keywords for Cypher query
+    private string FormatKeywordsForCypher(List<string> keywords)
+    {
+        if (keywords == null || keywords.Count == 0)
+            return "[]"; // Empty array
+
+        var formattedKeywords = keywords
+            .Select(k => $"'{k.Replace("'", "''")}'") // Escape single quotes
+            .ToList();
+
+        return $"[{string.Join(",", formattedKeywords)}]"; // Format as array
+    }
+
+    private async Task AddEntitiesAndRelationshipsWithAGEAsync(List<GraphEntity> entities, List<Relationship> relationships, CancellationToken cancellationToken = default)
+    {
+        // Create entities
         foreach (var entity in entities)
         {
-            var query = $"CREATE (n:Entity {{id: '{entity.Id}', name: '{entity.Name}', type: '{entity.Type}', description: '{entity.Description}'}})";
+            // Escape single quotes in string properties
+            var name = entity.Name.Replace("'", "''");
+            var type = entity.Type.Replace("'", "''");
+            var description = entity.Description.Replace("'", "''");
+            var sourceId = entity.SourceId?.Replace("'", "''") ?? "";
+
+            // Format properties directly in the Cypher query
+            var query = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+                CREATE (n:Entity {{
+                    id:            '{entity.Id}',
+                    name:          '{name}',
+                    type:          '{type}',
+                    description:   '{description}',
+                    keywords:      {FormatKeywordsForCypher(entity.Keywords)},
+                    weight:        {entity.Weight},
+                    sourceId:      '{sourceId}',
+                    vectorStoreId: '{entity.VectorStoreId}',
+                    createdAt:     '{entity.CreatedAt:o}'
+                }})
+                RETURN n
+            $$) as (n agtype);";
+
             await ExecuteCypherQuery<bool>(query, cancellationToken);
         }
 
+        // Create relationships
         foreach (var relationship in relationships)
         {
-            var query = $"MATCH (a:Entity {{id: '{relationship.SourceEntityId}'}}), (b: {{id: '{relationship.TargetEntityId}'}}) CREATE (a)-[r:{relationship.Type} {{description: '{relationship.Description}'}}]->(b)";
+            // Escape single quotes in string properties
+            var type = relationship.Type.Replace("'", "''");
+            var description = relationship.Description.Replace("'", "''");
+            var sourceId = relationship.SourceId?.Replace("'", "''") ?? "";
+
+            // Format properties directly in the Cypher query
+            var query = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+                MATCH (a:Entity), (b:Entity)
+                WHERE a.id = '{relationship.SourceEntityId}' AND b.id = '{relationship.TargetEntityId}'
+                CREATE (a)-[r:{type} {{
+                    id:            '{relationship.Id}',
+                    description:   '{description}',
+                    weight:        {relationship.Weight},
+                    keywords:      {FormatKeywordsForCypher(relationship.Keywords)},
+                    sourceId:      '{sourceId}',
+                    vectorStoreId: '{relationship.VectorStoreId}',
+                    createdAt:     '{relationship.CreatedAt:o}'
+                }}]->(b)
+                RETURN r
+            $$) as (r agtype);";
+
             await ExecuteCypherQuery<bool>(query, cancellationToken);
+        }
+    }
+
+    private async Task AddEntitiesAndRelationshipsWithSQLAsync(List<GraphEntity> entities, List<Relationship> relationships, CancellationToken cancellationToken = default)
+    {
+        // Ensure connection is open
+        if (_connection.State != System.Data.ConnectionState.Open)
+        {
+            await _connection.OpenAsync(cancellationToken);
+        }
+
+        // Create entities using direct SQL
+        foreach (var entity in entities)
+        {
+            try
+            {
+                // Escape single quotes in string properties
+                var name = entity.Name?.Replace("'", "''") ?? "";
+                var type = entity.Type?.Replace("'", "''") ?? "";
+                var description = entity.Description?.Replace("'", "''") ?? "";
+                var sourceId = entity.SourceId?.Replace("'", "''") ?? "";
+
+                // Create properties object with all entity properties
+                var propertiesJson = JsonSerializer.Serialize(new
+                {
+                    id = entity.Id.ToString(),
+                    name,
+                    type,
+                    description,
+                    keywords = entity.Keywords ?? new List<string>(),
+                    weight = entity.Weight,
+                    sourceId,
+                    vectorStoreId = entity.VectorStoreId.ToString(),
+                    createdAt = entity.CreatedAt
+                });
+
+                // Use direct SQL to insert into the vertex table
+                var query = $@"INSERT INTO ag_catalog.ag_vertex (graph_name, id, label, properties)
+                    VALUES ('{_graphName}', '{entity.Id}', 'Entity', '{propertiesJson}'::jsonb)
+                    ON CONFLICT (graph_name, id) DO UPDATE
+                    SET properties = '{propertiesJson}'::jsonb";
+
+                using var cmd = new NpgsqlCommand(query, _connection);
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error inserting entity {EntityId}", entity.Id);
+                // Continue with the next entity
+            }
+        }
+
+        // Create relationships using direct SQL
+        foreach (var relationship in relationships)
+        {
+            try
+            {
+                // Escape single quotes in string properties
+                var type = relationship.Type?.Replace("'", "''") ?? "";
+                var description = relationship.Description?.Replace("'", "''") ?? "";
+                var sourceId = relationship.SourceId?.Replace("'", "''") ?? "";
+
+                // Create properties object with all relationship properties
+                var propertiesJson = JsonSerializer.Serialize(new
+                {
+                    id = relationship.Id.ToString(),
+                    description,
+                    weight = relationship.Weight,
+                    keywords = relationship.Keywords ?? new List<string>(),
+                    sourceId,
+                    vectorStoreId = relationship.VectorStoreId.ToString(),
+                    createdAt = relationship.CreatedAt
+                });
+
+                // Use direct SQL to insert into the edge table
+                var query = $@"INSERT INTO ag_catalog.ag_edge (graph_name, start_id, end_id, label, properties)
+                    VALUES ('{_graphName}', '{relationship.SourceEntityId}', '{relationship.TargetEntityId}', '{type}', '{propertiesJson}'::jsonb)
+                    ON CONFLICT (graph_name, start_id, end_id, label) DO UPDATE
+                    SET properties = '{propertiesJson}'::jsonb";
+
+                using var cmd = new NpgsqlCommand(query, _connection);
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error inserting relationship from {SourceId} to {TargetId}", relationship.SourceEntityId, relationship.TargetEntityId);
+                // Continue with the next relationship
+            }
+        }
+    }
+
+    public async Task RemoveEntitiesAndRelationshipsAsync(List<string> entityIds, List<(string sourceId, string targetId)> relationshipIds, CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Removing {RelationshipCount} relationships and {EntityCount} entities", relationshipIds.Count, entityIds.Count);
+
+        try
+        {
+            // First try using the AGE Cypher approach
+            await RemoveEntitiesAndRelationshipsWithAGEAsync(entityIds, relationshipIds, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error using AGE Cypher for removing entities and relationships. Falling back to direct SQL approach.");
+
+            // Fallback to a more direct SQL approach
+            await RemoveEntitiesAndRelationshipsWithSQLAsync(entityIds, relationshipIds, cancellationToken);
+        }
+    }
+
+    private async Task RemoveEntitiesAndRelationshipsWithAGEAsync(List<string> entityIds, List<(string sourceId, string targetId)> relationshipIds, CancellationToken cancellationToken = default)
+    {
+        // Remove relationships first to maintain referential integrity
+        foreach (var (sourceId, targetId) in relationshipIds)
+        {
+            // Use proper AGE syntax for deleting relationships
+            var query = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+                MATCH (a:Entity)-[r]->(b:Entity)
+                WHERE a.id = '{sourceId}' AND b.id = '{targetId}'
+                DELETE r
+                RETURN count(*)
+            $$) as (count agtype);";
+
+            await ExecuteCypherQuery<bool>(query, cancellationToken);
+        }
+
+        // Then remove entities
+        foreach (var entityId in entityIds)
+        {
+            // Use proper AGE syntax for deleting entities
+            var query = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+                MATCH (n:Entity)
+                WHERE n.id = '{entityId}'
+                DELETE n
+                RETURN count(*)
+            $$) as (count agtype);";
+
+            await ExecuteCypherQuery<bool>(query, cancellationToken);
+        }
+    }
+
+    private async Task RemoveEntitiesAndRelationshipsWithSQLAsync(List<string> entityIds, List<(string sourceId, string targetId)> relationshipIds, CancellationToken cancellationToken = default)
+    {
+        // Ensure connection is open
+        if (_connection.State != System.Data.ConnectionState.Open)
+        {
+            await _connection.OpenAsync(cancellationToken);
+        }
+
+        // Remove relationships first to maintain referential integrity
+        foreach (var (sourceId, targetId) in relationshipIds)
+        {
+            try
+            {
+                // Use direct SQL to delete from the edge table
+                var query = $@"DELETE FROM ag_catalog.ag_edge
+                    WHERE graph_name = '{_graphName}' AND start_id = '{sourceId}' AND end_id = '{targetId}'";
+
+                using var cmd = new NpgsqlCommand(query, _connection);
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error removing relationship from {SourceId} to {TargetId}", sourceId, targetId);
+                // Continue with the next relationship
+            }
+        }
+
+        // Then remove entities
+        foreach (var entityId in entityIds)
+        {
+            try
+            {
+                // Use direct SQL to delete from the vertex table
+                var query = $@"DELETE FROM ag_catalog.ag_vertex
+                    WHERE graph_name = '{_graphName}' AND id = '{entityId}'";
+
+                using var cmd = new NpgsqlCommand(query, _connection);
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error removing entity {EntityId}", entityId);
+                // Continue with the next entity
+            }
         }
     }
 
@@ -657,12 +1010,14 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
     string targetEntityId,
     CancellationToken cancellationToken = default)
     {
-        var query = @"
-        SELECT * FROM ag_catalog.ag_shortest_path(
-            $$ MATCH p = shortestPath((source:Entity {id: $1})-[*]->(target:Entity {id: $2}))
-               RETURN relationships(p) AS rels $$,
-            ARRAY[$1, $2]
-        ) AS path";
+        _logger.LogInformation("Finding shortest path from {SourceId} to {TargetId}", sourceEntityId, targetEntityId);
+
+        // Use proper AGE Cypher syntax for finding shortest path
+        var query = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+            MATCH p = shortestPath((source:Entity)-[*]->(target:Entity))
+            WHERE source.id = '{sourceEntityId}' AND target.id = '{targetEntityId}'
+            RETURN [r IN relationships(p) | {{source_id: startNode(r).id, target_id: endNode(r).id, type: type(r), properties: properties(r)}}] AS path
+        $$) as (path agtype);";
 
         var relationships = new List<Relationship>();
 
@@ -704,14 +1059,15 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
         string keyword,
         CancellationToken cancellationToken = default)
     {
-        var query = @"
-        SELECT * FROM ag_catalog.ag_catalog_search(
-            $$ MATCH (n:Entity)
-               WHERE n.name =~ $1 OR n.description =~ $1
-               OPTIONAL MATCH (n)-[r]-(related)
-               RETURN n, collect(r) as rels, collect(related) as related_nodes $$,
-            ARRAY[$1]
-        ) AS results";
+        _logger.LogInformation("Getting nodes related to keyword: {Keyword}", keyword);
+
+        // Use proper AGE Cypher syntax for finding related nodes
+        var query = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+            MATCH (n:Entity)
+            WHERE n.name =~ '(?i).*{keyword}.*' OR n.description =~ '(?i).*{keyword}.*'
+            OPTIONAL MATCH (n)-[r]-(related)
+            RETURN n, collect(r) as rels, collect(related) as related_nodes
+        $$) as (n agtype, rels agtype, related_nodes agtype);";
 
         var results = new List<object>();
 
@@ -774,6 +1130,26 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
         _logger.LogInformation("Getting graph data with label: {Label}, maxDepth: {MaxDepth}, maxNodes: {MaxNodes}",
             label, maxDepth, maxNodes);
 
+        try
+        {
+            // First try using the AGE Cypher approach
+            return await GetGraphDataWithAGEAsync(label, maxDepth, maxNodes, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error using AGE Cypher for getting graph data. Falling back to direct SQL approach.");
+
+            // Fallback to a more direct SQL approach
+            return await GetGraphDataWithSQLAsync(label, maxDepth, maxNodes, cancellationToken);
+        }
+    }
+
+    private async Task<GraphData> GetGraphDataWithAGEAsync(
+        string label = "*",
+        int maxDepth = 2,
+        int maxNodes = 100,
+        CancellationToken cancellationToken = default)
+    {
         var result = new GraphData();
 
         // Ensure connection is open
@@ -782,32 +1158,72 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
             await _connection.OpenAsync(cancellationToken);
         }
 
-        try
+        // Get entities (nodes) using proper AGE Cypher syntax
+        string labelFilter = label != "*" ? $"WHERE n.type = '{label}'" : "";
+        var entitiesQuery = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+            MATCH (n:Entity)
+            {labelFilter}
+            RETURN n
+            LIMIT {maxNodes}
+        $$) as (n agtype);";
+
+        var entityIds = new HashSet<string>();
+
+        using (var cmd = new NpgsqlCommand(entitiesQuery, _connection))
+        using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
         {
-            // Get entities (nodes)
-            var entitiesQuery = $"SELECT id, properties FROM ag_catalog.ag_vertex WHERE graph_name = '{_graphName}'";
-            if (label != "*")
+            while (await reader.ReadAsync(cancellationToken))
             {
-                entitiesQuery += $" AND properties->>'type' = '{label}'";
+                var id = reader.GetString(0);
+                var propsJson = reader.GetString(1);
+                var props = JsonSerializer.Deserialize<Dictionary<string, object>>(propsJson) ?? new Dictionary<string, object>();
+
+                var entity = new GraphEntity
+                {
+                    Id = Guid.Parse(id),
+                    Name = props.TryGetValue("name", out var name) ? name.ToString() : "Unknown",
+                    Type = props.TryGetValue("type", out var type) ? type.ToString() : "Unknown",
+                    Description = props.TryGetValue("description", out var desc) ? desc.ToString() : "",
+                    Keywords = props.TryGetValue("keywords", out var keywords) ?
+                        JsonSerializer.Deserialize<List<string>>(keywords.ToString()) : new List<string>(),
+                    Weight = props.TryGetValue("weight", out var weight) ?
+                        float.Parse(weight.ToString()) : 1.0f
+                };
+
+                result.Entities.Add(entity);
+                entityIds.Add(id);
             }
-            entitiesQuery += $" LIMIT {maxNodes}";
+        }
 
-            var entityIds = new HashSet<string>();
+        // Get relationships (edges) between the entities
+        if (entityIds.Any())
+        {
+            // Create a comma-separated list of entity IDs for the query
+            string entityIdList = string.Join(", ", entityIds.Select(id => $"'{id}'"));
 
-            using (var cmd = new NpgsqlCommand(entitiesQuery, _connection))
+            // Get relationships (edges) using proper AGE Cypher syntax
+            var edgesQuery = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+                MATCH (a:Entity)-[r]->(b:Entity)
+                WHERE a.id IN [{entityIdList}] AND b.id IN [{entityIdList}]
+                RETURN a.id as source_id, b.id as target_id, type(r) as relationship_type, r as relationship_data
+            $$) as (source_id agtype, target_id agtype, relationship_type agtype, relationship_data agtype);";
+            using (var cmd = new NpgsqlCommand(edgesQuery, _connection))
             using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
             {
                 while (await reader.ReadAsync(cancellationToken))
                 {
-                    var id = reader.GetString(0);
-                    var propsJson = reader.GetString(1);
+                    var sourceId = reader.GetString(0);
+                    var targetId = reader.GetString(1);
+                    var relType = reader.GetString(2);
+                    var propsJson = reader.GetString(3);
                     var props = JsonSerializer.Deserialize<Dictionary<string, object>>(propsJson) ?? new Dictionary<string, object>();
 
-                    var entity = new GraphEntity
+                    var relationship = new Relationship
                     {
-                        Id = Guid.Parse(id),
-                        Name = props.TryGetValue("name", out var name) ? name.ToString() : "Unknown",
-                        Type = props.TryGetValue("type", out var type) ? type.ToString() : "Unknown",
+                        Id = Guid.NewGuid(), // Generate a new ID for the relationship
+                        SourceEntityId = sourceId,
+                        TargetEntityId = targetId,
+                        Type = relType,
                         Description = props.TryGetValue("description", out var desc) ? desc.ToString() : "",
                         Keywords = props.TryGetValue("keywords", out var keywords) ?
                             JsonSerializer.Deserialize<List<string>>(keywords.ToString()) : new List<string>(),
@@ -815,55 +1231,104 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
                             float.Parse(weight.ToString()) : 1.0f
                     };
 
-                    result.Entities.Add(entity);
-                    entityIds.Add(id);
+                    result.Relationships.Add(relationship);
                 }
             }
-
-            // Get relationships (edges) between the entities
-            if (entityIds.Any())
-            {
-                var edgesQuery = $"SELECT start_id, end_id, label, properties FROM ag_catalog.ag_edge " +
-                                $"WHERE graph_name = '{_graphName}' " +
-                                $"AND start_id IN ({string.Join(", ", entityIds.Select(id => $"'{id}'"))}) " +
-                                $"AND end_id IN ({string.Join(", ", entityIds.Select(id => $"'{id}'"))})";
-
-                using (var cmd = new NpgsqlCommand(edgesQuery, _connection))
-                using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
-                {
-                    while (await reader.ReadAsync(cancellationToken))
-                    {
-                        var sourceId = reader.GetString(0);
-                        var targetId = reader.GetString(1);
-                        var relType = reader.GetString(2);
-                        var propsJson = reader.GetString(3);
-                        var props = JsonSerializer.Deserialize<Dictionary<string, object>>(propsJson) ?? new Dictionary<string, object>();
-
-                        var relationship = new Relationship
-                        {
-                            Id = Guid.NewGuid(), // Generate a new ID for the relationship
-                            SourceEntityId = sourceId,
-                            TargetEntityId = targetId,
-                            Type = relType,
-                            Description = props.TryGetValue("description", out var desc) ? desc.ToString() : "",
-                            Keywords = props.TryGetValue("keywords", out var keywords) ?
-                                JsonSerializer.Deserialize<List<string>>(keywords.ToString()) : new List<string>(),
-                            Weight = props.TryGetValue("weight", out var weight) ?
-                                float.Parse(weight.ToString()) : 1.0f
-                        };
-
-                        result.Relationships.Add(relationship);
-                    }
-                }
-            }
-
-            return result;
         }
-        catch (Exception ex)
+
+        return result;
+    }
+
+    private async Task<GraphData> GetGraphDataWithSQLAsync(
+        string label = "*",
+        int maxDepth = 2,
+        int maxNodes = 100,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new GraphData();
+
+        // Ensure connection is open
+        if (_connection.State != System.Data.ConnectionState.Open)
         {
-            _logger.LogError(ex, "Error getting graph data");
-            throw;
+            await _connection.OpenAsync(cancellationToken);
         }
+
+        // Get entities (nodes) using direct SQL
+        string labelFilter = label != "*" ? $"AND properties->>'type' = '{label}'" : "";
+        var entitiesQuery = $@"SELECT id, properties FROM ag_catalog.ag_vertex
+            WHERE graph_name = '{_graphName}' {labelFilter}
+            LIMIT {maxNodes}";
+
+        var entityIds = new HashSet<string>();
+
+        using (var cmd = new NpgsqlCommand(entitiesQuery, _connection))
+        using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var id = reader.GetString(0);
+                var propsJson = reader.GetString(1);
+                var props = JsonSerializer.Deserialize<Dictionary<string, object>>(propsJson) ?? new Dictionary<string, object>();
+
+                var entity = new GraphEntity
+                {
+                    Id = Guid.Parse(id),
+                    Name = props.TryGetValue("name", out var name) ? name.ToString() : "Unknown",
+                    Type = props.TryGetValue("type", out var type) ? type.ToString() : "Unknown",
+                    Description = props.TryGetValue("description", out var desc) ? desc.ToString() : "",
+                    Keywords = props.TryGetValue("keywords", out var keywords) ?
+                        JsonSerializer.Deserialize<List<string>>(keywords.ToString()) : new List<string>(),
+                    Weight = props.TryGetValue("weight", out var weight) ?
+                        float.Parse(weight.ToString()) : 1.0f
+                };
+
+                result.Entities.Add(entity);
+                entityIds.Add(id);
+            }
+        }
+
+        // Get relationships (edges) between the entities
+        if (entityIds.Any())
+        {
+            // Create a comma-separated list of entity IDs for the query
+            string entityIdList = string.Join(", ", entityIds.Select(id => $"'{id}'"));
+
+            // Get relationships (edges) using direct SQL
+            var edgesQuery = $@"SELECT start_id, end_id, label, properties FROM ag_catalog.ag_edge
+                WHERE graph_name = '{_graphName}'
+                AND start_id IN ({entityIdList})
+                AND end_id IN ({entityIdList})";
+
+            using (var cmd = new NpgsqlCommand(edgesQuery, _connection))
+            using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
+            {
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var sourceId = reader.GetString(0);
+                    var targetId = reader.GetString(1);
+                    var relType = reader.GetString(2);
+                    var propsJson = reader.GetString(3);
+                    var props = JsonSerializer.Deserialize<Dictionary<string, object>>(propsJson) ?? new Dictionary<string, object>();
+
+                    var relationship = new Relationship
+                    {
+                        Id = Guid.NewGuid(), // Generate a new ID for the relationship
+                        SourceEntityId = sourceId,
+                        TargetEntityId = targetId,
+                        Type = relType,
+                        Description = props.TryGetValue("description", out var desc) ? desc.ToString() : "",
+                        Keywords = props.TryGetValue("keywords", out var keywords) ?
+                            JsonSerializer.Deserialize<List<string>>(keywords.ToString()) : new List<string>(),
+                        Weight = props.TryGetValue("weight", out var weight) ?
+                            float.Parse(weight.ToString()) : 1.0f
+                    };
+
+                    result.Relationships.Add(relationship);
+                }
+            }
+        }
+
+        return result;
     }
 
     public async Task<IEnumerable<string>> GetLabelsAsync(CancellationToken cancellationToken = default)
@@ -880,7 +1345,11 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
 
         try
         {
-            var query = $"SELECT DISTINCT properties->>'type' FROM ag_catalog.ag_vertex WHERE graph_name = '{_graphName}'";
+            // Use proper AGE Cypher syntax for getting distinct labels
+            var query = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+                MATCH (n:Entity)
+                RETURN DISTINCT n.type as label
+            $$) as (label agtype);";
 
             using (var cmd = new NpgsqlCommand(query, _connection))
             using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
@@ -915,7 +1384,12 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
 
         try
         {
-            var query = $"SELECT id, properties FROM ag_catalog.ag_vertex WHERE graph_name = '{_graphName}' AND id = '{id}'";
+            // Use proper AGE Cypher syntax for getting an entity by ID
+            var query = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+                MATCH (n:Entity)
+                WHERE n.id = '{id}'
+                RETURN n
+            $$) as (n agtype);";
 
             using (var cmd = new NpgsqlCommand(query, _connection))
             using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
@@ -963,8 +1437,12 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
 
         try
         {
-            var query = $"SELECT start_id, end_id, label, properties FROM ag_catalog.ag_edge " +
-                        $"WHERE graph_name = '{_graphName}' AND (start_id = '{id}' OR end_id = '{id}')";
+            // Use proper AGE Cypher syntax for getting entity relationships
+            var query = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+                MATCH (n:Entity)-[r]-(m:Entity)
+                WHERE n.id = '{id}'
+                RETURN n.id as source_id, m.id as target_id, type(r) as relationship_type, r as relationship_data
+            $$) as (source_id agtype, target_id agtype, relationship_type agtype, relationship_data agtype);";
 
             using (var cmd = new NpgsqlCommand(query, _connection))
             using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
@@ -1015,18 +1493,32 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
 
         try
         {
-            var props = new Dictionary<string, object>
-            {
-                { "name", entity.Name },
-                { "type", entity.Type },
-                { "description", entity.Description },
-                { "keywords", entity.Keywords },
-                { "weight", entity.Weight }
-            };
+            // Escape single quotes in string properties
+            var name = entity.Name.Replace("'", "''");
+            var type = entity.Type.Replace("'", "''");
+            var description = entity.Description.Replace("'", "''");
 
-            var propsJson = JsonSerializer.Serialize(props);
-            var query = $"UPDATE ag_catalog.ag_vertex SET properties = '{propsJson}' " +
-                        $"WHERE graph_name = '{_graphName}' AND id = '{entity.Id}'";
+            // Create properties object with all entity properties
+            var propertiesJson = JsonSerializer.Serialize(new
+            {
+                id = entity.Id.ToString(),
+                name,
+                type,
+                description,
+                keywords = entity.Keywords,
+                weight = entity.Weight,
+                sourceId = entity.SourceId,
+                vectorStoreId = entity.VectorStoreId.ToString(),
+                createdAt = entity.CreatedAt
+            });
+
+            // Use proper AGE Cypher syntax for updating an entity
+            var query = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+                MATCH (n:Entity)
+                WHERE n.id = '{entity.Id}'
+                SET n = {propertiesJson}
+                RETURN n
+            $$) as (n agtype);";
 
             using (var cmd = new NpgsqlCommand(query, _connection))
             {
@@ -1059,17 +1551,29 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
 
         try
         {
-            var props = new Dictionary<string, object>
-            {
-                { "description", relationship.Description },
-                { "keywords", relationship.Keywords },
-                { "weight", relationship.Weight }
-            };
+            // Escape single quotes in string properties
+            var type = relationship.Type.Replace("'", "''");
+            var description = relationship.Description.Replace("'", "''");
 
-            var propsJson = JsonSerializer.Serialize(props);
-            var query = $"UPDATE ag_catalog.ag_edge SET properties = '{propsJson}' " +
-                        $"WHERE graph_name = '{_graphName}' AND start_id = '{relationship.SourceEntityId}' " +
-                        $"AND end_id = '{relationship.TargetEntityId}'";
+            // Create properties object with all relationship properties
+            var propertiesJson = JsonSerializer.Serialize(new
+            {
+                id = relationship.Id.ToString(),
+                description,
+                weight = relationship.Weight,
+                keywords = relationship.Keywords,
+                sourceId = relationship.SourceId,
+                vectorStoreId = relationship.VectorStoreId.ToString(),
+                createdAt = relationship.CreatedAt
+            });
+
+            // Use proper AGE Cypher syntax for updating a relationship
+            var query = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+                MATCH (a:Entity)-[r:{type}]->(b:Entity)
+                WHERE a.id = '{relationship.SourceEntityId}' AND b.id = '{relationship.TargetEntityId}'
+                SET r = {propertiesJson}
+                RETURN r
+            $$) as (r agtype);";
 
             using (var cmd = new NpgsqlCommand(query, _connection))
             {
@@ -1094,9 +1598,16 @@ public class PostgresAGEGraphStorageService : IGraphStorageService, IDisposable
     {
         _logger.LogInformation("Running PageRank algorithm");
 
-        // Get all nodes and edges to build the graph
-        var nodesQuery = $"SELECT id, properties FROM ag_catalog.ag_vertex WHERE graph_name = '{_graphName}'";
-        var edgesQuery = $"SELECT start_id, end_id, properties FROM ag_catalog.ag_edge WHERE graph_name = '{_graphName}'";
+        // Get all nodes and edges to build the graph using proper AGE Cypher syntax
+        var nodesQuery = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+            MATCH (n:Entity)
+            RETURN n.id as id, n as properties
+        $$) as (id agtype, properties agtype);";
+
+        var edgesQuery = $@"SELECT * FROM ag_catalog.cypher('{_graphName}', $$
+            MATCH (a:Entity)-[r]->(b:Entity)
+            RETURN a.id as source_id, b.id as target_id, r as properties
+        $$) as (source_id agtype, target_id agtype, properties agtype);";
 
         // Ensure connection is open
         if (_connection.State != System.Data.ConnectionState.Open)

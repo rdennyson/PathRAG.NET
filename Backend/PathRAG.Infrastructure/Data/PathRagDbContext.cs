@@ -1,17 +1,21 @@
 using Microsoft.EntityFrameworkCore;
-using PathRAG.Core.Models;
+using Npgsql;
+using PathRAG.Infrastructure.Models;
+using PathRAG.Infrastructure.Models.Graph;
+using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace PathRAG.Infrastructure.Data;
 
 public class PathRagDbContext : DbContext
 {
-    public PathRagDbContext(DbContextOptions<PathRagDbContext> options) : base(options)
+    static PathRagDbContext()
     {
-        // Register the vector extension with Npgsql
-        // NpgsqlConnection.GlobalTypeMapper.EnableRecordsAsTuples = true;
-
         // Configure Npgsql to use snake_case for database object names
         AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+    }
+
+    public PathRagDbContext(DbContextOptions<PathRagDbContext> options) : base(options)
+    {
     }
 
     public DbSet<TextChunk> TextChunks { get; set; }
@@ -24,8 +28,18 @@ public class PathRagDbContext : DbContext
     public DbSet<ChatMessage> ChatMessages { get; set; }
     public DbSet<MessageAttachment> MessageAttachments { get; set; }
 
+    // Apache AGE graph tables
+    public DbSet<AGGraph> AGGraphs { get; set; }
+    public DbSet<AGVertex> AGVertices { get; set; }
+    public DbSet<AGEdge> AGEdges { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // Add extensions support
+        modelBuilder.HasPostgresExtension("vector");
+        modelBuilder.HasPostgresExtension("age");
+        modelBuilder.HasPostgresExtension("pg_trgm");
+
         // Set all table names to lowercase for PostgreSQL compatibility
         foreach (var entity in modelBuilder.Model.GetEntityTypes())
         {
@@ -173,46 +187,165 @@ public class PathRagDbContext : DbContext
 
         modelBuilder.Entity<ChatMessage>()
             .HasIndex(cm => cm.ChatSessionId);
+
+        // Configure Apache AGE graph tables
+        modelBuilder.Entity<AGGraph>(eb =>
+        {
+            eb.ToTable(
+                name: "ag_graph",
+                schema: "ag_catalog",
+                buildAction: tb => tb.ExcludeFromMigrations()
+            );
+
+            eb.HasKey(e => e.Name);
+        });
+        modelBuilder.Entity<AGVertex>()
+            .HasKey(v => new { v.GraphName, v.Id });
+
+        modelBuilder.Entity<AGVertex>()
+            .HasOne(v => v.Graph)
+            .WithMany(g => g.Vertices)
+            .HasForeignKey(v => v.GraphName);
+
+        modelBuilder.Entity<AGEdge>()
+            .HasKey(e => new { e.GraphName, e.StartId, e.EndId, e.Label });
+
+        modelBuilder.Entity<AGEdge>()
+            .HasOne(e => e.Graph)
+            .WithMany(g => g.Edges)
+            .HasForeignKey(e => e.GraphName);
+
+        modelBuilder.Entity<AGEdge>()
+            .HasOne(e => e.StartVertex)
+            .WithMany(v => v.OutgoingEdges)
+            .HasForeignKey(e => new { e.GraphName, e.StartId });
+
+        modelBuilder.Entity<AGEdge>()
+            .HasOne(e => e.EndVertex)
+            .WithMany(v => v.IncomingEdges)
+            .HasForeignKey(e => new { e.GraphName, e.EndId });
     }
 
     private static void ConfigureVectorEntity<T>(ModelBuilder modelBuilder) where T : class
     {
+        // The column type is now set using the [Column] attribute in the model
+        // We just need to ensure the column name is lowercase
         modelBuilder.Entity<T>()
             .Property("Embedding")
-            .HasColumnType("real[]")
-            .HasColumnName("embedding"); // Ensure the column name is lowercase
+            .HasColumnName("embedding");
     }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         base.OnConfiguring(optionsBuilder);
 
-        // Enable pgvector extension if it doesn't exist
-        optionsBuilder.UseNpgsql(builder =>
-            builder.EnableRetryOnFailure()
-                   .CommandTimeout(60)
-                   // Set PostgreSQL version
-                   .SetPostgresVersion(new Version(15, 0)));
+        // Additional configuration if needed
+        // Note: The main configuration is done in Program.cs
     }
 
     public async Task EnsureExtensionAsync()
     {
         try
         {
+            Console.WriteLine("Installing PostgreSQL extensions...");
+
             // Create the pgvector extension if it doesn't exist
+            Console.WriteLine("Installing vector extension...");
             await Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS vector");
 
             // Create the Apache AGE extension if it doesn't exist
+            Console.WriteLine("Installing age extension...");
             await Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS age");
 
+            // Load the AGE extension into the current database
+            Console.WriteLine("Loading AGE extension...");
+            await Database.ExecuteSqlRawAsync("LOAD 'age';");
+
+            // Set the search path to include ag_catalog
+            Console.WriteLine("Setting search path for AGE...");
+            await Database.ExecuteSqlRawAsync("SET search_path = ag_catalog, '$user', public;");
+
             // Create the pg_trgm extension for text search
+            Console.WriteLine("Installing pg_trgm extension...");
             await Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS pg_trgm");
 
-            Console.WriteLine("PostgreSQL extensions installed successfully");
+            // Create the AGE schema if it doesn't exist
+            Console.WriteLine("Creating AGE schema if it doesn't exist...");
+            await Database.ExecuteSqlRawAsync("CREATE SCHEMA IF NOT EXISTS ag_catalog;");
+
+            // Define the default graph name
+            var graphName = "pathrag";
+            Console.WriteLine($"Ensuring graph {graphName} exists...");
+
+            try {
+                // First, try to insert the default graph
+                // This will fail if the table doesn't exist, but we'll handle that in the catch block
+                await Database.ExecuteSqlRawAsync(@"
+                    INSERT INTO ag_catalog.ag_graph (graphid, name, namespace)
+                    VALUES (1, @graphName, 'public')
+                    ON CONFLICT (name) DO NOTHING;",
+                    new NpgsqlParameter("@graphName", graphName));
+
+                Console.WriteLine("Graph tables already exist. Ensuring graph exists.");
+            }
+            catch (Exception ex) {
+                // If we get here, it's likely because the table doesn't exist
+                Console.WriteLine($"Creating graph tables: {ex.Message}");
+
+                // Create the graph table if it doesn't exist
+                Console.WriteLine("Creating graph table...");
+                await Database.ExecuteSqlRawAsync(@"
+                    CREATE TABLE IF NOT EXISTS ag_catalog.ag_graph (
+                        graphid SERIAL PRIMARY KEY,
+                        name TEXT UNIQUE NOT NULL,
+                        namespace TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );");
+
+                // Insert the default graph
+                await Database.ExecuteSqlRawAsync(@"
+                    INSERT INTO ag_catalog.ag_graph (graphid, name, namespace)
+                    VALUES (1, @graphName, 'public')
+                    ON CONFLICT (name) DO NOTHING;",
+                    new NpgsqlParameter("@graphName", graphName));
+
+                // Create the vertex table if it doesn't exist
+                Console.WriteLine("Creating vertex table...");
+                await Database.ExecuteSqlRawAsync(@"
+                    CREATE TABLE IF NOT EXISTS ag_catalog.ag_vertex (
+                        graph_name TEXT REFERENCES ag_catalog.ag_graph(name) ON DELETE CASCADE,
+                        id TEXT,
+                        label TEXT,
+                        properties JSONB,
+                        PRIMARY KEY (graph_name, id)
+                    );");
+
+                // Create the edge table if it doesn't exist
+                Console.WriteLine("Creating edge table...");
+                await Database.ExecuteSqlRawAsync(@"
+                    CREATE TABLE IF NOT EXISTS ag_catalog.ag_edge (
+                        graph_name TEXT REFERENCES ag_catalog.ag_graph(name) ON DELETE CASCADE,
+                        start_id TEXT,
+                        end_id TEXT,
+                        label TEXT,
+                        properties JSONB,
+                        PRIMARY KEY (graph_name, start_id, end_id, label)
+                    );");
+            }
+
+            Console.WriteLine("PostgreSQL extensions and tables installed successfully");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error installing PostgreSQL extensions: {ex.Message}");
+            Console.WriteLine($"Stack trace: {ex.StackTrace}");
+
+            if (ex.InnerException != null)
+            {
+                Console.WriteLine($"Inner exception: {ex.InnerException.Message}");
+                Console.WriteLine($"Inner stack trace: {ex.InnerException.StackTrace}");
+            }
+
             throw; // Re-throw the exception to ensure the application fails if extensions can't be installed
         }
     }

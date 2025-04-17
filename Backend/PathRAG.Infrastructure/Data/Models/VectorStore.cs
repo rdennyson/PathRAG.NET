@@ -1,8 +1,8 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace PathRAG.Core.Models;
-
+namespace PathRAG.Infrastructure.Models;
+[Table("vectorstore", Schema = "public")]
 public class VectorStore
 {
     [Key]

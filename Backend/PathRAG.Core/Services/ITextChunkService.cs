@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using PathRAG.Core.Models;
+using PathRAG.Infrastructure.Models;
 using SharpToken;
 using System.Text;
 using System.Text.RegularExpressions;
