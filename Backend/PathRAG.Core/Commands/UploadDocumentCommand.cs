@@ -93,11 +93,25 @@ public class UploadDocumentHandler : IRequestHandler<UploadDocumentCommand, Text
 
         // Process entities
         var entities = extractionResults.SelectMany(r => r.Entities).Distinct().ToList();
+
+        // Set the vectorStoreId for all entities
+        foreach (var entity in entities)
+        {
+            entity.VectorStoreId = request.VectorStoreId;
+        }
+
         var entityTexts = entities.Select(e => $"{e.Name} {e.Description}").ToList();
         var entityEmbeddings = await _entityEmbeddingService.GetEmbeddingsAsync(entityTexts, cancellationToken);
 
         // Process relationships
         var relationships = extractionResults.SelectMany(r => r.Relationships).Distinct().ToList();
+
+        // Set the vectorStoreId for all relationships
+        foreach (var relationship in relationships)
+        {
+            relationship.VectorStoreId = request.VectorStoreId;
+        }
+
         var relationshipTexts = relationships.Select(r => r.Description).ToList();
         var relationshipEmbeddings = await _entityEmbeddingService.GetEmbeddingsAsync(relationshipTexts, cancellationToken);
 

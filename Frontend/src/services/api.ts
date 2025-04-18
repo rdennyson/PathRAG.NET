@@ -49,6 +49,8 @@ export interface ApiService {
   // Knowledge Graph
   getEntities: (vectorStoreId: string) => Promise<GraphEntity[]>;
   getRelationships: (vectorStoreId: string) => Promise<Relationship[]>;
+  generateKnowledgeGraph: (query: string, maxNodes?: number, vectorStoreId?: string) => Promise<any>;
+  getEntityTextChunks: (entityId: string) => Promise<any[]>;
 }
 
 // Create axios instance with base URL from environment variables
@@ -311,12 +313,26 @@ const apiService: ApiService = {
 
   // Knowledge Graph
   getEntities: async (vectorStoreId: string): Promise<GraphEntity[]> => {
-    const response = await apiClient.get(`/vectorstores/${vectorStoreId}/entities`);
+    const response = await apiClient.get(`/knowledgegraph/entities/${vectorStoreId}`);
     return response.data;
   },
 
   getRelationships: async (vectorStoreId: string): Promise<Relationship[]> => {
-    const response = await apiClient.get(`/vectorstores/${vectorStoreId}/relationships`);
+    const response = await apiClient.get(`/knowledgegraph/relationships/${vectorStoreId}`);
+    return response.data;
+  },
+
+  generateKnowledgeGraph: async (query: string, maxNodes?: number, vectorStoreId?: string): Promise<any> => {
+    const response = await apiClient.post(`/knowledgegraph/generate`, {
+      query,
+      maxNodes,
+      vectorStoreId,
+    });
+    return response.data;
+  },
+
+  getEntityTextChunks: async (entityId: string): Promise<any[]> => {
+    const response = await apiClient.get(`/knowledgegraph/entity/${entityId}/textchunks`);
     return response.data;
   },
 };
