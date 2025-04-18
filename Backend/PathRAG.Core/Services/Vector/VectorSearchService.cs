@@ -3,12 +3,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
-using PathRAG.Core.Models;
 using PathRAG.Infrastructure.Data;
 using PathRAG.Infrastructure.Models;
-using Pgvector;
 using Pgvector.EntityFrameworkCore;
-using System.Text;
 
 namespace PathRAG.Core.Services.Vector;
 
