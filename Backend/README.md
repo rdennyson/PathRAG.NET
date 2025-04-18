@@ -43,28 +43,52 @@ Update the `appsettings.json` file in the `src/PathRAG.Api` directory with your 
 
 ```json
 {
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
+  "AzureAd": {
+    "Instance": "https://login.microsoftonline.com/",
+    "TenantId": "00000000-0000-0000-0000-000000000000",
+    "ClientId": "00000000-0000-0000-0000-000000000000",
+    "ClientSecret": "",
+    "RedirectUri": "http://localhost:3000/callback"
+  },
   "ConnectionStrings": {
-    "DefaultConnection": "Host=localhost;Database=pathrag;Username=your_username;Password=your_password"
+    "DefaultConnection": "Host=localhost;Database=pathrag;Username=postgres;Password=test123"
   },
   "PathRAG": {
-    "Endpoint": "https://your-resource.openai.azure.com/",
-    "ApiKey": "your-azure-openai-api-key",
-    "ApiVersion": "2023-12-01-preview",
-    "DeploymentName": "your-gpt-deployment-name",
-    "EmbeddingDeployment": "your-embedding-deployment-name",
+    "Endpoint": "https://xyz.openai.azure.com/",
+    "ApiKey": "",
+    "ApiVersion": "2025-01-01-preview",
+    "DeploymentName": "gpt-4o-mini",
+    "EmbeddingDeployment": "text-embedding-3-large",
 
-    "CompletionModel": "gpt-4",
+    "CompletionModel": "gpt-4o-mini",
     "EmbeddingModel": "text-embedding-3-large",
-    "KeywordExtractionModel": "gpt-4",
+    "KeywordExtractionModel": "gpt-4o-mini",
 
     "WorkingDirectory": "./data",
+    "MaxDocumentLength": 1000000,
+    "EntityExtractMaxGleaning": 1,
+    "EntitySummaryMaxTokens": 500,
+
     "ChunkSize": 1200,
     "ChunkOverlap": 100,
-    "MaxTokens": 32768,
+
+    "MaxTokens": 16384,
     "Temperature": 0.7,
-    "TopK": 40
+    "TopK": 40,
+
+    "EnableEmbeddingCache": true,
+    "EnableLLMResponseCache": true,
+    "CacheExpirationMinutes": 60
   }
 }
+
 ```
 
 ### 3. Build and Run the Application
