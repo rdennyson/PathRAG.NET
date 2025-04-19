@@ -35,7 +35,7 @@ public class VectorSearchService : IVectorSearchService
         List<Guid>? vectorStoreIds = null)
     {
         return await PerformVectorSearchAsync<TextChunk>(
-            "textchunks",
+            "textchunk",
             queryEmbedding,
             topK,
             cancellationToken,
@@ -49,7 +49,7 @@ public class VectorSearchService : IVectorSearchService
         List<Guid>? vectorStoreIds = null)
     {
         return await PerformVectorSearchAsync<GraphEntity>(
-            "entities",
+            "entity",
             queryEmbedding,
             topK,
             cancellationToken,
@@ -63,7 +63,7 @@ public class VectorSearchService : IVectorSearchService
         List<Guid>? vectorStoreIds = null)
     {
         return await PerformVectorSearchAsync<Relationship>(
-            "relationships",
+            "relationship",
             queryEmbedding,
             topK,
             cancellationToken,

@@ -243,7 +243,7 @@ public class VectorStoresController : ControllerBase
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        var query = new GetEntitiesByVectorStoreIdQuery { VectorStoreId = id, UserId = userId };
+        var query = new PathRAG.Core.Queries.GetEntitiesByVectorStoreIdQuery { VectorStoreId = id, UserId = userId };
         var entities = await _mediator.Send(query);
 
         if (!entities.Any())
@@ -275,7 +275,7 @@ public class VectorStoresController : ControllerBase
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        var query = new GetRelationshipsByVectorStoreIdQuery { VectorStoreId = id, UserId = userId };
+        var query = new PathRAG.Core.Queries.GetRelationshipsByVectorStoreIdQuery { VectorStoreId = id, UserId = userId };
         var relationships = await _mediator.Send(query);
 
         if (!relationships.Any())

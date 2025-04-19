@@ -49,7 +49,7 @@ export interface ApiService {
   // Knowledge Graph
   getEntities: (vectorStoreId: string) => Promise<GraphEntity[]>;
   getRelationships: (vectorStoreId: string) => Promise<Relationship[]>;
-  generateKnowledgeGraph: (query: string, maxNodes?: number, vectorStoreId?: string) => Promise<any>;
+  generateKnowledgeGraph: (query: string, maxNodes?: number, vectorStoreId?: string) => Promise<any[]>;
   getEntityTextChunks: (entityId: string) => Promise<any[]>;
 }
 
@@ -322,13 +322,18 @@ const apiService: ApiService = {
     return response.data;
   },
 
-  generateKnowledgeGraph: async (query: string, maxNodes?: number, vectorStoreId?: string): Promise<any> => {
-    const response = await apiClient.post(`/knowledgegraph/generate`, {
-      query,
-      maxNodes,
-      vectorStoreId,
-    });
-    return response.data;
+  generateKnowledgeGraph: async (query: string, maxNodes?: number, vectorStoreId?: string): Promise<any[]> => {
+    try {
+      const response = await apiClient.post('/knowledgegraph/generate', {
+        query,
+        maxNodes: maxNodes || 15,
+        vectorStoreId
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error generating knowledge graph:', error);
+      throw error;
+    }
   },
 
   getEntityTextChunks: async (entityId: string): Promise<any[]> => {

@@ -110,9 +110,9 @@ public class QueryController : ControllerBase
             Response.HttpContext.RequestAborted.Register(() => cancellationTokenSource.Cancel());
 
             // Set up the response for streaming
-            Response.Headers.Add("Content-Type", "text/plain");
-            Response.Headers.Add("Cache-Control", "no-cache");
-            Response.Headers.Add("Connection", "keep-alive");
+            Response.Headers["Content-Type"] = "text/plain";
+            Response.Headers["Cache-Control"] = "no-cache";
+            Response.Headers["Connection"] = "keep-alive";
 
             // Get the stream generator from the handler
             var streamGenerator = await _mediator.Send(command, cancellationTokenSource.Token);

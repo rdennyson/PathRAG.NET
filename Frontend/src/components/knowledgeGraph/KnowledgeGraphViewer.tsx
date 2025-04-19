@@ -30,16 +30,24 @@ interface KnowledgeGraphViewerProps {
   maxDepth?: number;
   maxNodes?: number;
   searchQuery?: string;
+  nodes?: any[];
+  edges?: any[];
+  initialNodes?: any[];
+  initialEdges?: any[];
+  vectorStoreId?: string;
 }
 
 const KnowledgeGraphViewer: React.FC<KnowledgeGraphViewerProps> = ({
   entityType = '*',
   maxDepth = 2,
   maxNodes = 100,
-  searchQuery: initialSearchQuery = ''
+  searchQuery: initialSearchQuery = '',
+  nodes: initialNodes,
+  edges: initialEdges,
+  vectorStoreId: initialVectorStoreId
 }) => {
   const { vectorStores } = useApp();
-  const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string>('');
+  const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string>(initialVectorStoreId || '');
   const [entities, setEntities] = useState<GraphEntity[]>([]);
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -58,6 +66,75 @@ const KnowledgeGraphViewer: React.FC<KnowledgeGraphViewerProps> = ({
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [reactFlowInstance, setReactFlowInstance] = useState<any>(null);
   const [searchHistory, setSearchHistory] = useState<SavedGraphHistory[]>([]);
+
+  // Process raw nodes and edges into ReactFlow format
+  useEffect(() => {
+    if (initialNodes && initialNodes.length > 0) {
+      console.log('Processing initial nodes:', initialNodes.length);
+
+      // Convert raw nodes to ReactFlow format
+      const processedNodes = initialNodes.map((node: any) => {
+        // Generate random position if not provided
+        const x = node.x || Math.random() * 800;
+        const y = node.y || Math.random() * 600;
+
+        return {
+          id: node.id,
+          data: {
+            label: node.label,
+            type: node.type || 'concept',
+            description: node.description || '',
+            entityId: node.id // Store the original entity ID for later reference
+          },
+          position: { x, y },
+          style: {
+            background: node.background || '#e6f7ff',
+            color: '#000000',
+            border: `1px solid ${node.stroke || '#1890ff'}`,
+            width: 180,
+            borderRadius: 5,
+            padding: 10
+          }
+        };
+      });
+
+      // Process edges from adjacencies
+      const processedEdges: Edge[] = [];
+      initialNodes.forEach((node: any) => {
+        if (node.adjacencies && node.adjacencies.length > 0) {
+          node.adjacencies.forEach((edge: any) => {
+            processedEdges.push({
+              id: edge.id || `${edge.source}-${edge.target}`,
+              source: edge.source,
+              target: edge.target,
+              label: edge.label,
+              data: {
+                description: edge.description || '',
+                type: edge.label || 'related to'
+              },
+              style: { stroke: edge.color || '#888' },
+              markerEnd: {
+                type: MarkerType.ArrowClosed,
+                color: edge.color || '#888',
+              },
+            });
+          });
+        }
+      });
+
+      console.log('Setting ReactFlow nodes:', processedNodes.length, 'and edges:', processedEdges.length);
+      setNodes(processedNodes);
+      setEdges(processedEdges);
+
+      // Force a re-render and center the graph after a short delay
+      setTimeout(() => {
+        if (reactFlowInstance) {
+          console.log('Forcing graph to center');
+          reactFlowInstance.fitView({ padding: 0.2 });
+        }
+      }, 500);
+    }
+  }, [initialNodes, reactFlowInstance]);
 
   // Legacy state for compatibility with code that might call setGraphData
   const [, setGraphData] = useState<{ nodes: any[], links: any[] }>({ nodes: [], links: [] });
@@ -86,6 +163,7 @@ const KnowledgeGraphViewer: React.FC<KnowledgeGraphViewerProps> = ({
 
   // Initialize ReactFlow
   const onInit = useCallback((instance: any) => {
+    console.log('ReactFlow initialized:', instance);
     setReactFlowInstance(instance);
   }, []);
 
@@ -97,12 +175,17 @@ const KnowledgeGraphViewer: React.FC<KnowledgeGraphViewerProps> = ({
   // Center graph when nodes or edges change
   const centerGraph = useCallback(() => {
     if (reactFlowInstance) {
+      console.log('Centering graph with nodes:', nodes.length, 'edges:', edges.length);
       reactFlowInstance.fitView();
     }
-  }, [reactFlowInstance]);
+  }, [reactFlowInstance, nodes, edges]);
 
   useEffect(() => {
-    centerGraph();
+    if (nodes.length > 0) {
+      console.log('Nodes or edges changed, centering graph');
+      // Add a small delay to ensure ReactFlow has processed the nodes
+      setTimeout(centerGraph, 100);
+    }
   }, [nodes, edges, centerGraph]);
 
   // Handle saving to history
@@ -119,12 +202,21 @@ const KnowledgeGraphViewer: React.FC<KnowledgeGraphViewerProps> = ({
     setClickedSave(true);
   }, [nodes, edges, searchHistory, submittedUserInput]);
 
+  // Handle initial data and vector store changes
   useEffect(() => {
-    if (selectedVectorStoreId) {
+    console.log('Initial nodes:', initialNodes?.length, 'Initial edges:', initialEdges?.length);
+    if (initialNodes && initialNodes.length > 0 && initialEdges) {
+      console.log('Setting initial nodes and edges');
+      setNodes(initialNodes);
+      setEdges(initialEdges);
+    } else if (selectedVectorStoreId) {
+      console.log('Loading graph data for vector store:', selectedVectorStoreId);
       loadGraphData();
     } else if (vectorStores.length > 0) {
+      console.log('Setting default vector store');
       setSelectedVectorStoreId(vectorStores[0].id);
     } else {
+      console.log('Clearing graph data');
       setEntities([]);
       setRelationships([]);
       setGraphData({ nodes: [], links: [] });
@@ -132,7 +224,7 @@ const KnowledgeGraphViewer: React.FC<KnowledgeGraphViewerProps> = ({
       setNodes([]);
       setEdges([]);
     }
-  }, [selectedVectorStoreId, entityType, maxDepth, maxNodes]);
+  }, [selectedVectorStoreId, entityType, maxDepth, maxNodes, initialNodes, initialEdges]);
 
   useEffect(() => {
     if (searchTerm !== initialSearchQuery) {
@@ -319,31 +411,41 @@ const KnowledgeGraphViewer: React.FC<KnowledgeGraphViewerProps> = ({
     try {
       // Generate a knowledge graph using the API with the selected vector store
       const graphNodes = await apiService.generateKnowledgeGraph(searchTerm, 20, selectedVectorStoreId);
+      console.log('API response:', graphNodes);
 
       if (!graphNodes || graphNodes.length === 0) {
         console.warn('No graph data returned from API');
+        setIsLoading(false);
         return;
       }
 
       // Convert the API response to ReactFlow nodes and edges
-      const reactFlowNodes = graphNodes.map((node: any) => ({
-        id: node.id,
-        data: {
-          label: node.label,
-          type: node.type || 'concept',
-          description: node.description || '',
-          entityId: node.id // Store the original entity ID for later reference
-        },
-        position: { x: node.x, y: node.y },
-        style: {
-          background: node.background,
-          color: '#000000',
-          border: '1px solid #222138',
-          width: 180,
-          borderRadius: 5,
-          padding: 10
-        }
-      }));
+      const reactFlowNodes = graphNodes.map((node: any) => {
+        // Generate random position if not provided
+        const x = node.x || Math.random() * 800;
+        const y = node.y || Math.random() * 600;
+
+        console.log(`Creating node ${node.id} at position (${x}, ${y})`);
+
+        return {
+          id: node.id,
+          data: {
+            label: node.label,
+            type: node.type || 'concept',
+            description: node.description || '',
+            entityId: node.id // Store the original entity ID for later reference
+          },
+          position: { x, y },
+          style: {
+            background: node.background || '#e6f7ff',
+            color: '#000000',
+            border: `1px solid ${node.stroke || '#1890ff'}`,
+            width: 180,
+            borderRadius: 5,
+            padding: 10
+          }
+        };
+      });
 
       const reactFlowEdges: Edge[] = [];
 
@@ -351,8 +453,9 @@ const KnowledgeGraphViewer: React.FC<KnowledgeGraphViewerProps> = ({
       graphNodes.forEach((node: any) => {
         if (node.adjacencies && node.adjacencies.length > 0) {
           node.adjacencies.forEach((edge: any) => {
+            console.log(`Creating edge from ${edge.source} to ${edge.target}`);
             reactFlowEdges.push({
-              id: edge.id,
+              id: edge.id || `${edge.source}-${edge.target}`,
               source: edge.source,
               target: edge.target,
               label: edge.label,
@@ -370,6 +473,7 @@ const KnowledgeGraphViewer: React.FC<KnowledgeGraphViewerProps> = ({
         }
       });
 
+      console.log('Setting nodes:', reactFlowNodes.length, 'and edges:', reactFlowEdges.length);
       setNodes(reactFlowNodes);
       setEdges(reactFlowEdges);
 
@@ -389,6 +493,14 @@ const KnowledgeGraphViewer: React.FC<KnowledgeGraphViewerProps> = ({
       } catch (error) {
         console.error('Error fetching entities and relationships:', error);
       }
+
+      // Force a re-render and center the graph after a short delay
+      setTimeout(() => {
+        if (reactFlowInstance) {
+          console.log('Forcing graph to center');
+          reactFlowInstance.fitView({ padding: 0.2 });
+        }
+      }, 500);
     } catch (error) {
       console.error('Error generating knowledge graph:', error);
     } finally {

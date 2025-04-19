@@ -71,10 +71,11 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("default", policy =>
     {
-        policy.WithOrigins("http://localhost:3000")
+        policy.WithOrigins("http://localhost:3000", "http://localhost:3001")
             .AllowAnyMethod()
             .AllowAnyHeader()
-            .AllowCredentials();
+            .AllowCredentials()
+            .SetIsOriginAllowed(_ => true); // Allow any origin for EventSource
     });
 });
 
@@ -118,6 +119,8 @@ builder.Services.AddMediatR(cfg =>
 {
     cfg.RegisterServicesFromAssembly(typeof(PathRAG.Core.Commands.UploadDocumentCommand).Assembly);
 });
+
+// No streaming extensions needed for standard API approach
 
 
 
